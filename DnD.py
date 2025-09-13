@@ -9,8 +9,15 @@ RANDOM_SEED = 42
 
 # Core stats
 WARRIOR = dict(HP=71, AC=16, ATK_MOD=3, DMG_MOD=3)
-MONSTER = dict(HP=157, AC=12, ATK_MOD=7, DMG_MOD=4, DMG_DIE=8)
 HEALER  = dict(HP=63, AC=12, ATK_MOD=2, DMG_MOD=2, DMG_DIE=6)
+
+#lvl 10 party members
+#Fighter - HP: 100, AC: 18, ATK_MOD: 5, DMG_MOD: 4, DMG_DIE: 10
+#Rogue - HP: 80, AC: 16, ATK_MOD: 6, DMG_MOD: 3, DMG_DIE: 8
+#Wizard - HP: 60, AC: 12, ATK_MOD: 4, DMG_MOD: 5, DMG_DIE: 6
+FIGHTER = dict(HP=100, AC=18, ATK_MOD=5, DMG_MOD=4, DMG_DIE=10)
+ROGUE   = dict(HP=80, AC=16, ATK_MOD=6, DMG_MOD=3, DMG_DIE=8)
+WIZARD  = dict(HP=60, AC=12, ATK_MOD=4, DMG_MOD=5, DMG_DIE=6)
 
 #MONSTERS!
 #Cloaker - HP: 78, AC: 14, ATK_MOD: 4, DMG_MOD: 2, DMG_DIE: 8
@@ -19,6 +26,12 @@ HEALER  = dict(HP=63, AC=12, ATK_MOD=2, DMG_MOD=2, DMG_DIE=6)
 #Young Blue Dragon - HP: 152, AC: 18, ATK_MOD: 7, DMG_MOD: 4, DMG_DIE: 10
 #Aberrant Screecher(homebrew) - HP: 140, AC: 20, ATK_MOD: 8, DMG_MOD: 0, DMG_DIE: 6
 #Doom Marauder(homebrew) - HP: 180, AC: 17, ATK_MOD: 3, DMG_MOD: 3, DMG_DIE: 12
+CLOAKER = dict(HP=78, AC=14, ATK_MOD=4, DMG_MOD=2, DMG_DIE=8)
+BLUE_SLAAD = dict(HP=104, AC=17, ATK_MOD=5, DMG_MOD=3, DMG_DIE=8)
+GIANT_APE = dict(HP=157, AC=12, ATK_MOD=7, DMG_MOD=4, DMG_DIE=12)
+YOUNG_BLUE_DRAGON = dict(HP=152, AC=18, ATK_MOD=7, DMG_MOD=4, DMG_DIE=10)
+ABERRANT_SCREECHER = dict(HP=140, AC=20, ATK_MOD=8, DMG_MOD=0, DMG_DIE=6)
+DOOM_MARAUDER = dict(HP=180, AC=17, ATK_MOD=3, DMG_MOD=3, DMG_DIE=12)
 
 # ---------------------------
 # Dice helpers
@@ -51,9 +64,9 @@ def initiative_order(names):
 # ---------------------------
 # 1v1 battle
 # ---------------------------
-def simulate_battle_1v1(w_die):
+def simulate_battle_1v1(w_die, monster=GIANT_APE):
     w_hp = WARRIOR["HP"]
-    m_hp = MONSTER["HP"]
+    m_hp = monster["HP"]
     order = initiative_order(["warrior", "monster"])
     warrior_first = (order[0] == "warrior")
 
@@ -83,7 +96,7 @@ def simulate_battle_1v1(w_die):
                     max_streak_in_battle = max(max_streak_in_battle, cur_streak)
                     cur_streak = 0
             else:
-                hit = crit or ((r + WARRIOR["ATK_MOD"]) >= MONSTER["AC"])
+                hit = crit or ((r + WARRIOR["ATK_MOD"]) >= monster["AC"])
                 if hit:
                     if crit:
                         cur_streak += 1
@@ -104,9 +117,9 @@ def simulate_battle_1v1(w_die):
                 if crit: received_crit_first_turn = True
                 first_monster_attack_done = True
             if not miss:
-                hit = crit or ((r + MONSTER["ATK_MOD"]) >= WARRIOR["AC"])
+                hit = crit or ((r + monster["ATK_MOD"]) >= WARRIOR["AC"])
                 if hit:
-                    w_hp -= dmg(MONSTER["DMG_DIE"], MONSTER["DMG_MOD"], crit)
+                    w_hp -= dmg(monster["DMG_DIE"], monster["DMG_MOD"], crit)
         turn += 1
 
     if cur_streak > 0:
@@ -128,8 +141,8 @@ def conditional_prob(wins, cond):
     den = sum(1 for c in cond if c)
     return (num/den) if den else float("nan")
 
-def simulate_many_1v1(w_die):
-    results = [simulate_battle_1v1(w_die) for _ in range(N_SIMS)]
+def simulate_many_1v1(w_die , monster=GIANT_APE):
+    results = [simulate_battle_1v1(w_die, monster) for _ in range(N_SIMS)]
     wins = [r["warrior_won"] for r in results]
     base = sum(wins) / N_SIMS
     went_first = [r["warrior_first"] for r in results]
@@ -159,9 +172,9 @@ def simulate_many_1v1(w_die):
 # ---------------------------
 # Healer scenario
 # ---------------------------
-def simulate_battle_with_healer(w_die=10):
+def simulate_battle_with_healer(w_die=10, monster=GIANT_APE):
     w_hp = WARRIOR["HP"]; h_hp = HEALER["HP"]
-    m_hp = WARRIOR["HP"] + HEALER["HP"]
+    m_hp = monster["HP"]
     max_w = WARRIOR["HP"]; max_h = HEALER["HP"]
 
     order = initiative_order(["warrior","healer","monster"])
@@ -171,7 +184,7 @@ def simulate_battle_with_healer(w_die=10):
         if actor == "warrior":
             r, crit, miss = roll_attack()
             if not miss:
-                hit = crit or ((r + WARRIOR["ATK_MOD"]) >= MONSTER["AC"])
+                hit = crit or ((r + WARRIOR["ATK_MOD"]) >= monster["AC"])
                 if hit:
                     m_hp -= dmg(w_die, WARRIOR["DMG_MOD"], crit)
 
@@ -180,7 +193,7 @@ def simulate_battle_with_healer(w_die=10):
             if (w_hp >= max_w) and (h_hp >= max_h):
                 r, crit, miss = roll_attack()
                 if not miss:
-                    hit = crit or ((r + HEALER["ATK_MOD"]) >= MONSTER["AC"])
+                    hit = crit or ((r + HEALER["ATK_MOD"]) >= monster["AC"])
                     if hit:
                         m_hp -= dmg(HEALER["DMG_DIE"], HEALER["DMG_MOD"], crit)
             else:
@@ -205,9 +218,9 @@ def simulate_battle_with_healer(w_die=10):
             r, crit, miss = roll_attack()
             if not miss:
                 target_ac = HEALER["AC"] if target_is_h else WARRIOR["AC"]
-                hit = crit or ((r + MONSTER["ATK_MOD"]) >= target_ac)
+                hit = crit or ((r + monster["ATK_MOD"]) >= target_ac)
                 if hit:
-                    d = dmg(MONSTER["DMG_DIE"], MONSTER["DMG_MOD"], crit)
+                    d = dmg(monster["DMG_DIE"], monster["DMG_MOD"], crit)
                     if target_is_h: h_hp -= d
                     else:           w_hp -= d
         t += 1
@@ -221,7 +234,7 @@ def main():
     random.seed(RANDOM_SEED)
 
     # A) 1v1 summaries per damage die
-    rows = [simulate_many_1v1(d) for d in DICE_TO_TEST]
+    rows = [simulate_many_1v1(d, monster=CLOAKER) for d in DICE_TO_TEST]
 
     # write CSV
     with open("dnd_1v1_summaries.csv","w",newline="",encoding="utf-8") as f:
