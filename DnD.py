@@ -11,7 +11,7 @@ RANDOM_SEED = 42
 WARRIOR = dict(HP=71, AC=16, ATK_MOD=3, DMG_MOD=3)
 HEALER  = dict(HP=63, AC=12, ATK_MOD=2, DMG_MOD=2, DMG_DIE=6)
 
-#lvl 10 party members
+#lvl 10 party members for full party scenario
 #Fighter - HP: 100, AC: 18, ATK_MOD: 5, DMG_MOD: 4, DMG_DIE: 10
 #Rogue - HP: 80, AC: 16, ATK_MOD: 6, DMG_MOD: 3, DMG_DIE: 8
 #Wizard - HP: 60, AC: 12, ATK_MOD: 4, DMG_MOD: 5, DMG_DIE: 6
