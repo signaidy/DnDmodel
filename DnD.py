@@ -45,9 +45,55 @@ def heal_amount(spell: str, slot_level: int, mod: int) -> int:
 
 #lvl 10 party members for full party scenario
 #Rogue - HP: 80, AC: 16, ATK_MOD: 6, DMG_MOD: 3, DMG_DIE: 8
-#Wizard - HP: 60, AC: 12, ATK_MOD: 4, DMG_MOD: 5, DMG_DIE: 6
 ROGUE   = dict(HP=80, AC=16, ATK_MOD=6, DMG_MOD=3, DMG_DIE=8)
+
+# Rogue abilities
+ROGUE_LEVEL = 10
+SNEAK_ATTACK_DICE = 5      # 5d6 at level 10 (doubles on crit)
+SNEAK_ATTACK_DIE  = 6
+ROGUE_STEADY_AIM = True    # if no ally has acted before Rogue this round, Rogue uses Steady Aim -> advantage
+ROGUE_UNCANNY_DODGE = True # once per round, halve damage from one monster hit on Rogue
+
+#Wizard - HP: 60, AC: 12, ATK_MOD: 4, DMG_MOD: 5, DMG_DIE: 6
 WIZARD  = dict(HP=60, AC=12, ATK_MOD=4, DMG_MOD=5, DMG_DIE=6)
+
+# Wizard spell slots for level 10
+WIZARD_SLOTS_L10 = {1: 4, 2: 3, 3: 3, 4: 3, 5: 2}
+
+# Wizard combat kit (kept simple & consistent with attack-roll model)
+# - Chromatic Orb (attack roll): (slot+2)d8 damage on hit; crit doubles dice. Costs chosen slot.
+# - Magic Missile (auto-hit): darts = slot+2; each dart = 1d4+1; good finisher; costs chosen slot.
+# - Fire Bolt cantrip (attack roll): 3d10 damage at level 10; crit doubles dice; no slot cost.
+# - Shield reaction: +5 AC vs a single attack; if the attack would hit but within +5, spend the lowest slot to negate.
+WIZARD_CANTRIP_DICE  = 2   # Fire Bolt scales to 3d10 at lvl 11; at lvl 10 it's 2d10 in RAW
+WIZARD_CANTRIP_DIE   = 10
+WIZARD_SHIELD_ACTIVE = True
+
+def wizard_spend_lowest_slot(slots: dict) -> int:
+    """Spend the lowest-level slot available. Return level spent or 0 if none."""
+    for lvl in sorted(slots):
+        if slots[lvl] > 0:
+            slots[lvl] -= 1
+            return lvl
+    return 0
+
+def wizard_highest_slot(slots: dict) -> int:
+    """Highest slot level available (0 if none)."""
+    highs = [lvl for lvl, cnt in slots.items() if cnt > 0]
+    return max(highs) if highs else 0
+
+def wizard_magic_missile_damage(slot_level: int) -> int:
+    darts = slot_level + 2
+    return sum(roll(4) + 1 for _ in range(darts))
+
+def wizard_chromatic_orb_damage(slot_level: int, crit: bool) -> int:
+    dice = slot_level + 2
+    n = dice * (2 if crit else 1)
+    return sum(roll(8) for _ in range(n))
+
+def wizard_fire_bolt_damage(crit: bool) -> int:
+    n = WIZARD_CANTRIP_DICE * (2 if crit else 1)
+    return sum(roll(WIZARD_CANTRIP_DIE) for _ in range(n))
 
 #MONSTERS!
 #Cloaker - HP: 78, AC: 14, ATK_MOD: 4, DMG_MOD: 2, DMG_DIE: 8
