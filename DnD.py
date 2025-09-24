@@ -148,11 +148,22 @@ YOUNG_BLUE_DRAGON.update(dict(
     )
 ))
 
+# Aberrant Screecher: 2 swings, Sonic Screech (AOE) with recharge 5–6
+ABERRANT_SCREECHER.update(dict(
+    ATTACKS=2,
+    BREATH=dict(
+        N_DICE=6,          # 6d6 thunder AOE
+        DIE=6,
+        RECHARGE=[5, 6],   # recharge on 5–6
+        SAVE_SUCCESS_P=0.5 # 50% chance to halve damage per target
+    ),
+    SPELL_RESIST_AC_BONUS=2  # sound-warping makes spell attacks slightly harder
+))
+
 # --- Homebrew: Doom Marauder ---
 DOOM_MARAUDER.update(dict(
-    # Make basic swings matter
-    ATK_MOD=6,              # was 3
-    ATTACKS=3,              # was 2
+    ATK_MOD=3,
+    ATTACKS=2,
 
     # Reaction: once per round, on a miss against the Marauder
     COUNTER_ON_MISS=True,
@@ -170,6 +181,7 @@ DOOM_MARAUDER.update(dict(
         RECHARGE=[5, 6],        # ~33% per turn after use
         SAVE_SUCCESS_P=0.5      # simple half-on-save stand-in
     ),
+    BREATH_CHARGES=2, # double-barrel
 
     # Wolf buddy (abstracted)
     WOLF=dict(TRIGGER_PCT=0.60, DURATION=4, DIE=10, MOD=3)  # was 3 rounds of d8+2
@@ -261,6 +273,8 @@ def simulate_battle_1v1(w_die, monster=GIANT_APE):
     monster_max_hp = monster["HP"]       # cap for regen
     breath_cfg = monster.get("BREATH")
     breath_ready = bool(breath_cfg)
+    breath_max_charges = monster.get("BREATH_CHARGES", 1) if breath_cfg else 0
+    breath_charges = breath_max_charges if breath_ready else 0
     
     # Marauder (optional) state
     marauder_counter_ready = bool(monster.get("COUNTER_ON_MISS"))
@@ -397,16 +411,23 @@ def simulate_battle_1v1(w_die, monster=GIANT_APE):
             if breath_cfg and not breath_ready:
                 if roll(6) in breath_cfg["RECHARGE"]:
                     breath_ready = True
+                    breath_charges = breath_max_charges  # restore both barrels for Marauder
 
             used_breath = False
             if breath_cfg and breath_ready:
-                # 1v1: breath still hurts; use it simply when ready
-                dmg_breath = sum(roll(breath_cfg["DIE"]) for _ in range(breath_cfg["N_DICE"]))
-                # simple "save": 50% to halve
+                base = sum(roll(breath_cfg["DIE"]) for _ in range(breath_cfg["N_DICE"]))
+                dmg_breath = base
                 if random.random() < breath_cfg["SAVE_SUCCESS_P"]:
                     dmg_breath //= 2
-                w_hp -= dmg_breath
-                breath_ready = False
+
+                # If we have 2 barrels and doubling this blast would kill, dump both now
+                use_two = (breath_charges >= 2) and (2 * dmg_breath >= w_hp)
+                applied = 2 if use_two else 1
+
+                w_hp -= dmg_breath * applied
+                breath_charges -= applied
+                if breath_charges <= 0:
+                    breath_ready = False
                 used_breath = True
                 
             # Summon spectral wolf once at threshold
@@ -514,6 +535,8 @@ def simulate_battle_with_healer(w_die=10, monster=GIANT_APE):
     monster_max_hp = monster["HP"]       # cap for regen
     breath_cfg = monster.get("BREATH")
     breath_ready = bool(breath_cfg)
+    breath_max_charges = monster.get("BREATH_CHARGES", 1) if breath_cfg else 0
+    breath_charges = breath_max_charges if breath_ready else 0
     
     marauder_counter_ready = bool(monster.get("COUNTER_ON_MISS"))
     wolf_cfg = monster.get("WOLF")
@@ -690,22 +713,30 @@ def simulate_battle_with_healer(w_die=10, monster=GIANT_APE):
             if breath_cfg and not breath_ready:
                 if roll(6) in breath_cfg["RECHARGE"]:
                     breath_ready = True
+                    breath_charges = breath_max_charges
 
             used_breath = False
             alive_targets = int(w_hp > 0) + int(h_hp > 0)
 
-            if breath_cfg and breath_ready and alive_targets >= 2:
-                # Breath AOE: apply to each alive party member
-                dmg_breath = sum(roll(breath_cfg["DIE"]) for _ in range(breath_cfg["N_DICE"]))
-                if w_hp > 0:
-                    d = dmg_breath
-                    if random.random() < breath_cfg["SAVE_SUCCESS_P"]: d //= 2
-                    w_hp -= d
-                if h_hp > 0:
-                    d = dmg_breath
-                    if random.random() < breath_cfg["SAVE_SUCCESS_P"]: d //= 2
-                    h_hp -= d
-                breath_ready = False
+            if breath_cfg and breath_ready and alive_targets >= 1:
+                base = sum(roll(breath_cfg["DIE"]) for _ in range(breath_cfg["N_DICE"]))
+
+                # Compute per-target damage (with independent saves)
+                d_w = base if w_hp > 0 else 0
+                d_h = base if h_hp > 0 else 0
+                if w_hp > 0 and random.random() < breath_cfg["SAVE_SUCCESS_P"]: d_w //= 2
+                if h_hp > 0 and random.random() < breath_cfg["SAVE_SUCCESS_P"]: d_h //= 2
+
+                # Would doubling kill anyone and we still have two barrels?
+                use_two = (breath_charges >= 2) and ((2*d_w >= w_hp) or (2*d_h >= h_hp))
+
+                applied = 2 if use_two else 1
+                if w_hp > 0: w_hp -= d_w * applied
+                if h_hp > 0: h_hp -= d_h * applied
+
+                breath_charges -= applied
+                if breath_charges <= 0:
+                    breath_ready = False
                 used_breath = True
                 
             if wolf_cfg and (not wolf_summoned) and (m_hp <= monster_max_hp * wolf_cfg["TRIGGER_PCT"]):
@@ -848,6 +879,8 @@ def simulate_battle_full_party(w_die=10, monster=GIANT_APE):
     monster_max_hp = monster["HP"]       # cap for regen
     breath_cfg = monster.get("BREATH")
     breath_ready = bool(breath_cfg)
+    breath_max_charges = monster.get("BREATH_CHARGES", 1) if breath_cfg else 0
+    breath_charges = breath_max_charges if breath_ready else 0
     marauder_counter_ready = bool(monster.get("COUNTER_ON_MISS"))
     wolf_cfg = monster.get("WOLF")
     wolf_rounds_left = 0
@@ -1097,26 +1130,46 @@ def simulate_battle_full_party(w_die=10, monster=GIANT_APE):
             if breath_cfg and not breath_ready:
                 if roll(6) in breath_cfg["RECHARGE"]:
                     breath_ready = True
+                    breath_charges = breath_max_charges
 
             # Count alive targets
             alive = []
-            if w_hp > 0: alive.append(("warrior", WARRIOR["AC"]))
-            if h_hp > 0: alive.append(("healer",  HEALER["AC"]))
-            if r_hp > 0: alive.append(("rogue",   ROGUE["AC"]))
-            if z_hp > 0: alive.append(("wizard",  WIZARD["AC"]))
+            if w_hp > 0: alive.append(("warrior", "w"))
+            if h_hp > 0: alive.append(("healer",  "h"))
+            if r_hp > 0: alive.append(("rogue",   "r"))
+            if z_hp > 0: alive.append(("wizard",  "z"))
 
             used_breath = False
-            if breath_cfg and breath_ready and len(alive) >= 2:
-                dmg_breath = sum(roll(breath_cfg["DIE"]) for _ in range(breath_cfg["N_DICE"]))
-                for name, _ac in alive:
-                    d = dmg_breath
+            if breath_cfg and breath_ready and breath_charges > 0 and len(alive) >= 1:
+                base = sum(roll(breath_cfg["DIE"]) for _ in range(breath_cfg["N_DICE"]))
+
+                # Roll independent saves and gather per-target damage
+                per = {}
+                for name, tag in alive:
+                    d = base
                     if random.random() < breath_cfg["SAVE_SUCCESS_P"]:
                         d //= 2
-                    if name == "warrior": w_hp -= d
-                    elif name == "healer": h_hp -= d
-                    elif name == "rogue":  r_hp -= d
-                    else:                  z_hp -= d
-                breath_ready = False
+                    per[tag] = d
+
+                # Only double if we actually have both charges AND doubling would kill someone
+                def would_kill(tag, hp):
+                    return (tag in per) and (2 * per[tag] >= hp)
+
+                use_two = (breath_charges >= 2) and (
+                    would_kill("w", w_hp) or would_kill("h", h_hp) or
+                    would_kill("r", r_hp) or would_kill("z", z_hp)
+                )
+                applied = 2 if use_two else 1
+
+                # Apply damage
+                if "w" in per: w_hp -= per["w"] * applied
+                if "h" in per: h_hp -= per["h"] * applied
+                if "r" in per: r_hp -= per["r"] * applied
+                if "z" in per: z_hp -= per["z"] * applied
+
+                breath_charges -= applied
+                if breath_charges <= 0:
+                    breath_ready = False
                 used_breath = True
                 
             if wolf_cfg and (not wolf_summoned) and (monster["HP"] <= monster_max_hp * wolf_cfg["TRIGGER_PCT"]):
