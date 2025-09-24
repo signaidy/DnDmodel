@@ -1,5 +1,9 @@
 import random, statistics, csv, argparse
+import numpy as np
+import matplotlib
+import matplotlib.pyplot as plt
 
+matplotlib.use('Agg')  # for headless servers
 # ---------------------------
 # Tunables
 # ---------------------------
@@ -1012,17 +1016,110 @@ def parse_args():
                    help="RNG seed (default 42).")
     return p.parse_args()
 
+def _sanitize_filename(s: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in s)
+
+def _numeric_metrics(rows: list[dict]) -> list[str]:
+    # take keys from first row that are numeric in all rows
+    metrics = []
+    for k, v in rows[0].items():
+        if k == "warrior_die":
+            continue
+        if all(isinstance(r.get(k), (int, float)) for r in rows):
+            metrics.append(k)
+    return metrics
+
+def _ensure_same_dice(rows: list[dict]) -> list[str]:
+    return [r["warrior_die"] for r in rows]
+
+def plot_per_monster(monster_key: str,
+                     rows_solo: list[dict],
+                     rows_heal: list[dict],
+                     rows_full: list[dict]):
+    dice_labels = _ensure_same_dice(rows_solo)  # assumes same dice order across scenarios
+    x = np.arange(len(dice_labels))
+    width = 0.27
+
+    metrics = _numeric_metrics(rows_solo)  # same schema for all three
+    # One graph per metric
+    for metric in metrics:
+        y_solo  = [r[metric] for r in rows_solo]
+        y_heal  = [r[metric] for r in rows_heal]
+        y_full  = [r[metric] for r in rows_full]
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.bar(x - width, y_solo,  width, label="Solo")
+        ax.bar(x,          y_heal, width, label="Healer")
+        ax.bar(x + width,  y_full, width, label="Full Party")
+
+        ax.set_xlabel("Damage Die")
+        ax.set_ylabel("Data Value")
+        ax.set_title(f"{metric} - {monster_key}")
+        ax.set_xticks(x, dice_labels)
+        ax.legend()
+        fig.tight_layout()
+
+        fname = f"plot_{_sanitize_filename(metric)}_{monster_key}.png"
+        fig.savefig(fname, dpi=150)
+        plt.close(fig)
+        
+# Plot all monsters together for each metric & scenario
+def plot_all_monsters(results_by_monster: dict[str, dict[str, list[dict]]]):
+    if not results_by_monster:
+        return
+
+    # Pick any monster to derive metric keys & dice labels
+    sample_monster = next(iter(results_by_monster))
+    dice_labels = _ensure_same_dice(results_by_monster[sample_monster]['solo'])
+    n_dice = len(dice_labels)
+    metrics = _numeric_metrics(results_by_monster[sample_monster]['solo'])
+
+    team_keys = [("solo", "Solo"), ("healer", "Healer"), ("full", "Full Party")]
+    monsters = list(results_by_monster.keys())
+    x = np.arange(len(monsters))
+    width = 0.8 / n_dice  # fit all dice per monster nicely
+
+    for metric in metrics:
+        for team_key, team_label in team_keys:
+            fig, ax = plt.subplots(figsize=(12, 6))
+            # For each die, plot a bar per monster with an offset
+            for i, dlabel in enumerate(dice_labels):
+                # Gather y across monsters for this die and team
+                ys = []
+                for m in monsters:
+                    rows = results_by_monster[m][team_key]
+                    # rows are ordered by dice; get the index by label safely
+                    idx = [row["warrior_die"] for row in rows].index(dlabel)
+                    ys.append(rows[idx][metric])
+                ax.bar(x + (i - (n_dice-1)/2) * width, ys, width, label=dlabel if i == 0 else None)
+
+            ax.set_xlabel("Monster")
+            ax.set_ylabel("Data Value")
+            ax.set_title(f"{metric} - All Monsters - {team_label}")
+            ax.set_xticks(x, monsters)
+            # Single legend showing dice labels (attach only once)
+            handles, _ = ax.get_legend_handles_labels()
+            if handles:
+                ax.legend(title="Damage Die")
+            fig.tight_layout()
+
+            fname = f"final_{_sanitize_filename(metric)}_{_sanitize_filename(team_key)}_all_monsters.png"
+            fig.savefig(fname, dpi=150)
+            plt.close(fig)
+
 def run_suite_for_monster(monster_key: str, n_sims: int):
     monster = MONSTERS[monster_key]
-    rows_1v1  = [summarize_many(simulate_battle_1v1,        d, monster, n_sims) for d in DICE_TO_TEST]
+    rows_1v1  = [summarize_many(simulate_battle_1v1,         d, monster, n_sims) for d in DICE_TO_TEST]
     rows_heal = [summarize_many(simulate_battle_with_healer, d, monster, n_sims) for d in DICE_TO_TEST]
     rows_full = [summarize_many(simulate_battle_full_party,  d, monster, n_sims) for d in DICE_TO_TEST]
 
     suffix = f"_{monster_key}" if monster_key else ""
-    # If running a single monster (legacy behavior), keep original filenames (no suffix)
     write_csv(f"dnd_1v1_summaries{suffix}.csv", rows_1v1)
     write_csv(f"dnd_healer_summaries{suffix}.csv", rows_heal)
     write_csv(f"dnd_fullparty_summaries{suffix}.csv", rows_full)
+
+    # Per-monster grouped bar charts
+    plot_per_monster(monster_key, rows_1v1, rows_heal, rows_full)
 
     print(f"Monster selected: {monster_key}")
     print("---- 1v1 summaries ----")
@@ -1033,15 +1130,21 @@ def run_suite_for_monster(monster_key: str, n_sims: int):
     for r in rows_full: print(r)
     print(f"\nFiles written: dnd_1v1_summaries{suffix}.csv, dnd_healer_summaries{suffix}.csv, dnd_fullparty_summaries{suffix}.csv\n")
 
+    # Return for final all-monsters plots
+    return {"solo": rows_1v1, "healer": rows_heal, "full": rows_full}
+
 def main():
     args = parse_args()
     random.seed(args.seed)
 
     if args.all_monsters:
+        results_by_monster = {}
         for key in MONSTERS.keys():
-            run_suite_for_monster(key, args.sims)
+            results_by_monster[key] = run_suite_for_monster(key, args.sims)
+        # Final comparison plots across monsters for each metric & team
+        plot_all_monsters(results_by_monster)
+        print("Final cross-monster comparison plots written (see files starting with 'final_').")
     else:
-        # Single-monster mode keeps legacy filenames (no suffix)
         monster, mname = get_monster(args.monster)
         run_suite_for_monster(mname, args.sims)
 
