@@ -58,7 +58,7 @@ ROGUE_UNCANNY_DODGE = True # once per round, halve damage from one monster hit o
 WIZARD  = dict(HP=60, AC=12, ATK_MOD=4, DMG_MOD=5, DMG_DIE=6)
 
 # Wizard spell slots for level 10
-WIZARD_SLOTS_L10 = {1: 4, 2: 3, 3: 3, 4: 3, 5: 2}
+WIZARD_SLOTS_L10 = {1: 4, 2: 3, 3: 2, 4: 2, 5: 1}
 
 # Wizard combat kit (kept simple & consistent with attack-roll model)
 # - Chromatic Orb (attack roll): (slot+2)d8 damage on hit; crit doubles dice. Costs chosen slot.
@@ -148,6 +148,24 @@ YOUNG_BLUE_DRAGON.update(dict(
     )
 ))
 
+# --- Homebrew: Doom Marauder ---
+DOOM_MARAUDER.update(dict(
+    ATTACKS=2,                                  # axe + shotgun vibe
+    # Reaction: on a miss against the Marauder, it makes one counter attack (1/round)
+    COUNTER_ON_MISS=True,
+    COUNTER_DAMAGE_DIE=12,
+    COUNTER_DAMAGE_MOD=3,
+
+    # Anti-spell feel
+    SPELL_RESIST_AC_BONUS=3,                    # tougher vs spell attack rolls (Orb/Bolt)
+    AUTO_SPELL_RESIST_PCT=0.5,                  # halves auto-hit spell damage (Magic Missile)
+
+    # Spectral wolf: summoned once when <= 60% HP; bites for 3 rounds
+    WOLF=dict(TRIGGER_PCT=0.60, DURATION=3, DIE=8, MOD=2)
+))
+
+
+
 def get_monster(name: str):
     key = name.strip().upper().replace(" ", "_")
     if key in MONSTERS:
@@ -231,6 +249,12 @@ def simulate_battle_1v1(w_die, monster=GIANT_APE):
     monster_max_hp = monster["HP"]       # cap for regen
     breath_cfg = monster.get("BREATH")
     breath_ready = bool(breath_cfg)
+    
+    # Marauder (optional) state
+    marauder_counter_ready = bool(monster.get("COUNTER_ON_MISS"))
+    wolf_cfg = monster.get("WOLF")
+    wolf_rounds_left = 0
+    wolf_summoned = False
 
     # First-attack flags (computed AFTER abilities resolution)
     first_warrior_attack_done = False
@@ -249,6 +273,9 @@ def simulate_battle_1v1(w_die, monster=GIANT_APE):
     turn = 0
     while w_hp > 0 and m_hp > 0:
         actor = order[turn % 2]
+        if (turn % 2) == 0:
+            marauder_counter_ready = bool(monster.get("COUNTER_ON_MISS"))
+
         if actor == "warrior":
             # --- Second Wind (bonus-like): heal when low, does not consume attack here ---
             if second_wind_available and (w_hp <= max_w * SECOND_WIND_THRESHOLD):
@@ -260,8 +287,8 @@ def simulate_battle_1v1(w_die, monster=GIANT_APE):
 
             # Closure to perform one attack with abilities
             def do_one_attack(is_first_attack_of_warrior_turn):
-                nonlocal m_hp, cur_streak, max_streak_in_battle, all_streaks
-                nonlocal sup_dice, warrior_adv_next
+                nonlocal m_hp, w_hp, cur_streak, max_streak_in_battle, all_streaks
+                nonlocal sup_dice, warrior_adv_next, marauder_counter_ready
                 nonlocal first_warrior_attack_done, first_attack_was_crit, first_attack_was_miss
 
                 # Advantage only if granted from a prior Trip Attack
@@ -290,6 +317,14 @@ def simulate_battle_1v1(w_die, monster=GIANT_APE):
                             add = roll(SUPERIORITY_DIE_D)
                             raw_hit = crit or ((r + add + atk_mod) >= monster_effective_ac(monster))
                     final_hit = raw_hit
+                    
+                # Marauder Counter (reaction) if the attacker missed
+                if (not final_hit) and monster.get("COUNTER_ON_MISS") and marauder_counter_ready and (m_hp > 0): #line 322
+                    r2, c2, m2 = roll_attack()
+                    if not m2 and (c2 or ((r2 + monster["ATK_MOD"]) >= WARRIOR["AC"])):
+                        w_hp -= dmg(monster.get("COUNTER_DAMAGE_DIE", monster["DMG_DIE"]),
+                                    monster.get("COUNTER_DAMAGE_MOD", monster["DMG_MOD"]), c2)
+                    marauder_counter_ready = False
 
                 # Record first-attack flags AFTER resolution with abilities
                 if is_first_attack_of_warrior_turn and (not first_warrior_attack_done):
@@ -361,6 +396,16 @@ def simulate_battle_1v1(w_die, monster=GIANT_APE):
                 w_hp -= dmg_breath
                 breath_ready = False
                 used_breath = True
+                
+            # Summon spectral wolf once at threshold
+            if wolf_cfg and (not wolf_summoned) and (m_hp <= monster_max_hp * wolf_cfg["TRIGGER_PCT"]):
+                wolf_summoned = True
+                wolf_rounds_left = wolf_cfg["DURATION"]
+
+            # Wolf bites each monster turn while active
+            if wolf_cfg and wolf_rounds_left > 0 and w_hp > 0:
+                w_hp -= (roll(wolf_cfg["DIE"]) + wolf_cfg["MOD"])
+                wolf_rounds_left -= 1
 
             if not used_breath:
                 attacks = monster.get("ATTACKS", 1)
@@ -395,16 +440,22 @@ def conditional_prob(wins, cond):
     return (num/den) if den else float("nan")
 
 def simulate_many_1v1(w_die , monster=GIANT_APE):
-    results = [simulate_battle_1v1(w_die, monster) for _ in range(N_SIMS)]
+    results = []
+    for _ in range(N_SIMS):
+        m = dict(monster)  # local copy with its own HP
+        results.append(simulate_battle_1v1(w_die, m))
+
     wins = [r["warrior_won"] for r in results]
     base = sum(wins) / N_SIMS
+    losses = N_SIMS - sum(wins)
     party_first = [r["party_first"] for r in results]
     first_crit = [r["first_attack_crit"] for r in results]
     first_miss = [r["first_attack_miss"] for r in results]
     got_crit_first = [r["received_crit_first_turn"] for r in results]
 
     all_streaks = []
-    for r in results: all_streaks.extend(s for s in r["crit_streaks"] if s >= 0)
+    for r in results:
+        all_streaks.extend(s for s in r["crit_streaks"] if s >= 0)
     pos = [s for s in all_streaks if s > 0]
     avg_streak = statistics.mean(pos) if pos else 0.0
     min_streak = min(pos) if pos else 0
@@ -412,6 +463,8 @@ def simulate_many_1v1(w_die , monster=GIANT_APE):
 
     return {
         "warrior_die": f"d{w_die}",
+        "wins": sum(wins),
+        "losses": losses,
         "baseline_P(win)": base,
         "P(win | party first)": conditional_prob(wins, party_first),
         "P(win | first attack crit)": conditional_prob(wins, first_crit),
@@ -449,6 +502,11 @@ def simulate_battle_with_healer(w_die=10, monster=GIANT_APE):
     monster_max_hp = monster["HP"]       # cap for regen
     breath_cfg = monster.get("BREATH")
     breath_ready = bool(breath_cfg)
+    
+    marauder_counter_ready = bool(monster.get("COUNTER_ON_MISS"))
+    wolf_cfg = monster.get("WOLF")
+    wolf_rounds_left = 0
+    wolf_summoned = False
 
     # Flags para condiciones (del GUERRERO y del 1er ataque del MONSTRUO)
     first_warrior_attack_done = False
@@ -463,6 +521,22 @@ def simulate_battle_with_healer(w_die=10, monster=GIANT_APE):
     cur_streak = 0
     max_streak_in_battle = 0
     all_streaks = []
+    
+    def marauder_counter_vs(attacker_is_healer: bool):
+        nonlocal w_hp, h_hp, marauder_counter_ready
+        if (not monster.get("COUNTER_ON_MISS")) or (not marauder_counter_ready) or (m_hp <= 0):
+            return
+        r2, c2, m2 = roll_attack()
+        if m2:
+            marauder_counter_ready = False
+            return
+        ac = HEALER["AC"] if attacker_is_healer else WARRIOR["AC"]
+        if c2 or ((r2 + monster["ATK_MOD"]) >= ac):
+            d = dmg(monster.get("COUNTER_DAMAGE_DIE", monster["DMG_DIE"]),
+                    monster.get("COUNTER_DAMAGE_MOD", monster["DMG_MOD"]), c2)
+            if attacker_is_healer: h_hp -= d
+            else:                  w_hp -= d
+        marauder_counter_ready = False
 
     def best_available(predicate):
         candidates = [lvl for lvl, cnt in slots.items() if cnt > 0 and predicate(lvl, cnt)]
@@ -470,6 +544,8 @@ def simulate_battle_with_healer(w_die=10, monster=GIANT_APE):
 
     t = 0
     while w_hp > 0 and h_hp > 0 and m_hp > 0:
+        if (t % 3) == 0:  # new round in 3-actor loop
+            marauder_counter_ready = bool(monster.get("COUNTER_ON_MISS"))
         actor = order[t % 3]
         if actor == "warrior":
             # Second Wind (bonus-like)
@@ -508,6 +584,9 @@ def simulate_battle_with_healer(w_die=10, monster=GIANT_APE):
                     first_warrior_attack_done = True
                     first_attack_was_crit = crit
                     first_attack_was_miss = (not final_hit)
+                    
+                if not final_hit:
+                    marauder_counter_vs(attacker_is_healer=False)
 
                 if final_hit:
                     extra = 0
@@ -545,15 +624,18 @@ def simulate_battle_with_healer(w_die=10, monster=GIANT_APE):
                     do_one_attack(is_first_attack_of_warrior_turn=False)
 
         elif actor == "healer":
+            # If everyone is full, attack; otherwise heal.
             if (w_hp >= max_w) and (h_hp >= max_h):
                 r, crit, miss = roll_attack()
-                if not miss:
-                    hit = crit or ((r + HEALER["ATK_MOD"]) >= monster_effective_ac(monster))
-                    if hit:
-                        m_hp -= dmg(HEALER["DMG_DIE"], HEALER["DMG_MOD"], crit)
+                if not miss and (crit or (r + HEALER["ATK_MOD"]) >= monster_effective_ac(monster)):
+                    m_hp -= dmg(HEALER["DMG_DIE"], HEALER["DMG_MOD"], crit)
             else:
                 both_injured = (w_hp < max_w) and (h_hp < max_h)
                 someone_low  = (w_hp < max_w * 0.5) or (h_hp < max_h * 0.5)
+
+                def best_available(pred):
+                    cand = [lvl for lvl, cnt in slots.items() if cnt > 0 and pred(lvl, cnt)]
+                    return max(cand) if cand else 0
 
                 chosen = None
                 if both_injured:
@@ -565,25 +647,22 @@ def simulate_battle_with_healer(w_die=10, monster=GIANT_APE):
                     if lvl >= 1:
                         chosen = ("cure_wounds", lvl)
                 if (chosen is None) and ((w_hp < max_w) or (h_hp < max_h)):
-                    lvl = best_available(lambda L, C: L <= 2)
-                    if lvl == 0:
-                        lvl = best_available(lambda L, C: True)
+                    lvl = best_available(lambda L, C: L <= 2) or best_available(lambda L, C: True)
                     if lvl >= 1:
                         chosen = ("healing_word", lvl)
 
                 if chosen is None:
+                    # fallback attack
                     r, crit, miss = roll_attack()
-                    if not miss:
-                        hit = crit or ((r + HEALER["ATK_MOD"]) >= monster_effective_ac(monster))
-                        if hit:
-                            m_hp -= dmg(HEALER["DMG_DIE"], HEALER["DMG_MOD"], crit)
+                    if not miss and (crit or (r + HEALER["ATK_MOD"]) >= monster_effective_ac(monster)):
+                        m_hp -= dmg(HEALER["DMG_DIE"], HEALER["DMG_MOD"], crit)
                 else:
                     spell, lvl = chosen
                     if spell == "mass_healing_word":
                         heal = heal_amount(spell, lvl, SPELL_MOD)
                         w_hp = min(max_w, w_hp + heal)
                         h_hp = min(max_h, h_hp + heal)
-                    elif spell in ("cure_wounds", "healing_word"):
+                    else:
                         target_is_w = (w_hp <= h_hp)
                         heal = heal_amount(spell, lvl, SPELL_MOD)
                         if target_is_w: w_hp = min(max_w, w_hp + heal)
@@ -616,6 +695,18 @@ def simulate_battle_with_healer(w_die=10, monster=GIANT_APE):
                     h_hp -= d
                 breath_ready = False
                 used_breath = True
+                
+            if wolf_cfg and (not wolf_summoned) and (m_hp <= monster_max_hp * wolf_cfg["TRIGGER_PCT"]):
+                wolf_summoned = True
+                wolf_rounds_left = wolf_cfg["DURATION"]
+
+            if wolf_cfg and wolf_rounds_left > 0:
+                # bite lowest-HP alive (prefer healer on ties)
+                target_is_h = (h_hp > 0 and (h_hp <= w_hp or w_hp <= 0))
+                bite = roll(wolf_cfg["DIE"]) + wolf_cfg["MOD"]
+                if target_is_h: h_hp -= bite
+                elif w_hp > 0:  w_hp -= bite
+                wolf_rounds_left -= 1
 
             if not used_breath:
                 attacks = monster.get("ATTACKS", 1)
@@ -653,9 +744,14 @@ def simulate_battle_with_healer(w_die=10, monster=GIANT_APE):
     )
     
 def simulate_many_with_healer(w_die, monster=GIANT_APE):
-    results = [simulate_battle_with_healer(w_die, monster) for _ in range(N_SIMS)]
+    results = []
+    for _ in range(N_SIMS):
+        m = dict(monster)  # local copy with its own HP
+        results.append(simulate_battle_with_healer(w_die, m))
+
     wins = [r["warrior_won"] for r in results]
     base = sum(wins) / N_SIMS
+    losses = N_SIMS - sum(wins)
     party_first = [r["party_first"] for r in results]
     first_crit = [r["first_attack_crit"] for r in results]
     first_miss = [r["first_attack_miss"] for r in results]
@@ -671,6 +767,8 @@ def simulate_many_with_healer(w_die, monster=GIANT_APE):
 
     return {
         "warrior_die": f"d{w_die}",
+        "wins": sum(wins),
+        "losses": losses,
         "baseline_P(win)": base,
         "P(win | party first)": conditional_prob(wins, party_first),
         "P(win | first attack crit)": conditional_prob(wins, first_crit),
@@ -738,6 +836,33 @@ def simulate_battle_full_party(w_die=10, monster=GIANT_APE):
     monster_max_hp = monster["HP"]       # cap for regen
     breath_cfg = monster.get("BREATH")
     breath_ready = bool(breath_cfg)
+    marauder_counter_ready = bool(monster.get("COUNTER_ON_MISS"))
+    wolf_cfg = monster.get("WOLF")
+    wolf_rounds_left = 0
+    wolf_summoned = False
+    
+    def marauder_counter(attacker_name: str):
+        nonlocal w_hp, h_hp, r_hp, z_hp, marauder_counter_ready, rogue_uncanny_ready
+        if (not monster.get("COUNTER_ON_MISS")) or (not marauder_counter_ready) or (monster["HP"] <= 0):
+            return
+        r2, c2, m2 = roll_attack()
+        if m2:
+            marauder_counter_ready = False
+            return
+        ac_map = {"warrior": WARRIOR["AC"], "healer": HEALER["AC"], "rogue": ROGUE["AC"], "wizard": WIZARD["AC"]}
+        if c2 or ((r2 + monster["ATK_MOD"]) >= ac_map[attacker_name]):
+            dmg_amt = dmg(monster.get("COUNTER_DAMAGE_DIE", monster["DMG_DIE"]),
+                        monster.get("COUNTER_DAMAGE_MOD", monster["DMG_MOD"]), c2)
+            # Rogue can Uncanny Dodge the counter once/round (non-crit)            
+            if attacker_name == "rogue" and ROGUE_UNCANNY_DODGE and rogue_uncanny_ready and not c2:
+                dmg_amt //= 2
+                rogue_uncanny_ready = False
+
+            if   attacker_name == "warrior": w_hp -= dmg_amt
+            elif attacker_name == "healer":  h_hp -= dmg_amt
+            elif attacker_name == "rogue":   r_hp -= dmg_amt
+            else:                            z_hp -= dmg_amt
+        marauder_counter_ready = False
 
     def end_streak_if_any():
         nonlocal cur_streak, max_streak_in_battle, all_streaks
@@ -763,6 +888,7 @@ def simulate_battle_full_party(w_die=10, monster=GIANT_APE):
             # New round
             allies_attacked_this_round = False
             rogue_uncanny_ready = True
+            marauder_counter_ready = bool(monster.get("COUNTER_ON_MISS"))
 
         actor = order[t % len(order)]
 
@@ -816,6 +942,7 @@ def simulate_battle_full_party(w_die=10, monster=GIANT_APE):
                     monster["HP"] -= dmg_total
                 else:
                     end_streak_if_any()
+                    marauder_counter(attacker_name="warrior")
 
             do_one_warrior_attack(is_first=True)
             if (monster["HP"] > 0) and (action_surge > 0):
@@ -865,6 +992,8 @@ def simulate_battle_full_party(w_die=10, monster=GIANT_APE):
                     r, crit, miss = roll_attack()
                     if not miss and (crit or (r + HEALER["ATK_MOD"])>= monster_effective_ac(monster)):
                         monster["HP"] -= dmg(HEALER["DMG_DIE"], HEALER["DMG_MOD"], crit)
+                    else:
+                        marauder_counter(attacker_name="healer")
                     allies_attacked_this_round = True
                 else:
                     spell, lvl = chosen
@@ -899,6 +1028,8 @@ def simulate_battle_full_party(w_die=10, monster=GIANT_APE):
                 sa_dice = SNEAK_ATTACK_DICE * (2 if crit else 1)
                 sneak = sum(roll(SNEAK_ATTACK_DIE) for _ in range(sa_dice))
                 monster["HP"] -= (weapon + sneak)
+            else:
+                marauder_counter(attacker_name="rogue")
             allies_attacked_this_round = True
 
         elif actor == "wizard" and z_hp > 0 and monster["HP"] > 0:
@@ -907,10 +1038,14 @@ def simulate_battle_full_party(w_die=10, monster=GIANT_APE):
             if high > 0:
                 # Expected MM damage
                 mm_darts = high + 2
-                expected_mm = mm_darts * 3.5  # E[1d4+1]=3.5
+                expected_mm = mm_darts * 3.5  # E[1d4+1]=3.5                
+                if monster.get("AUTO_SPELL_RESIST_PCT"):
+                    expected_mm *= (1 - monster["AUTO_SPELL_RESIST_PCT"])
                 if expected_mm >= monster["HP"]:
                     # Finish with Magic Missile (auto-hit)
                     dmg_mm = wizard_magic_missile_damage(high)
+                    if monster.get("AUTO_SPELL_RESIST_PCT"):
+                        dmg_mm = int(round(dmg_mm * (1 - monster["AUTO_SPELL_RESIST_PCT"])))
                     monster["HP"] -= dmg_mm
                     wizard_slots[high] -= 1
                 else:
@@ -918,6 +1053,8 @@ def simulate_battle_full_party(w_die=10, monster=GIANT_APE):
                     r, crit, miss = roll_attack()
                     if not miss and (crit or (r + WIZARD["ATK_MOD"]) >= monster_effective_ac(monster, is_spell_attack=True)):
                         monster["HP"] -= wizard_chromatic_orb_damage(high, crit)
+                    else:
+                        marauder_counter(attacker_name="wizard")
                     # spend slot regardless of hit/miss
                     wizard_slots[high] -= 1
             else:
@@ -925,6 +1062,8 @@ def simulate_battle_full_party(w_die=10, monster=GIANT_APE):
                 r, crit, miss = roll_attack()
                 if not miss and (crit or (r + WIZARD["ATK_MOD"]) >= monster_effective_ac(monster, is_spell_attack=True)):
                     monster["HP"] -= wizard_fire_bolt_damage(crit)
+                else:
+                    marauder_counter(attacker_name="wizard")
             allies_attacked_this_round = True
 
         elif actor == "monster" and monster["HP"] > 0:
@@ -957,6 +1096,20 @@ def simulate_battle_full_party(w_die=10, monster=GIANT_APE):
                     else:                  z_hp -= d
                 breath_ready = False
                 used_breath = True
+                
+            if wolf_cfg and (not wolf_summoned) and (monster["HP"] <= monster_max_hp * wolf_cfg["TRIGGER_PCT"]):
+                wolf_summoned = True
+                wolf_rounds_left = wolf_cfg["DURATION"]
+
+            if wolf_cfg and wolf_rounds_left > 0:
+                tgt_name, _tgt_hp, _tgt_ac = monster_choose_target()
+                if tgt_name:
+                    bite = roll(wolf_cfg["DIE"]) + wolf_cfg["MOD"]
+                    if   tgt_name == "warrior": w_hp -= bite
+                    elif tgt_name == "healer":  h_hp -= bite
+                    elif tgt_name == "rogue":   r_hp -= bite
+                    else:                       z_hp -= bite
+                wolf_rounds_left -= 1
 
             if not used_breath:
                 attacks = monster.get("ATTACKS", 1)
@@ -1037,7 +1190,6 @@ def simulate_battle_full_party(w_die=10, monster=GIANT_APE):
     )
     
 def simulate_many_full_party(w_die, monster=GIANT_APE):
-    # Copy the monster statblock per sim so we don't mutate the global
     results = []
     for _ in range(N_SIMS):
         m = dict(monster)  # local copy with its own HP
@@ -1045,6 +1197,7 @@ def simulate_many_full_party(w_die, monster=GIANT_APE):
 
     wins = [r["warrior_won"] for r in results]
     base = sum(wins) / N_SIMS
+    losses = N_SIMS - sum(wins)
     party_first = [r["party_first"] for r in results]
     first_crit = [r["first_attack_crit"] for r in results]
     first_miss = [r["first_attack_miss"] for r in results]
@@ -1060,6 +1213,8 @@ def simulate_many_full_party(w_die, monster=GIANT_APE):
 
     return {
         "warrior_die": f"d{w_die}",
+        "wins": sum(wins),
+        "losses": losses,
         "baseline_P(win)": base,
         "P(win | party first)": conditional_prob(wins, party_first),
         "P(win | first attack crit)": conditional_prob(wins, first_crit),
@@ -1079,6 +1234,13 @@ def parse_args():
                    help="Elige monstruo: CLOAKER | BLUE_SLAAD | GIANT_APE | YOUNG_BLUE_DRAGON | ABERRANT_SCREECHER | DOOM_MARAUDER")
     return p.parse_args()
 
+def rounded_copy(row, nd=6):
+    out = dict(row)
+    for k,v in row.items():
+        if isinstance(v, float):
+            out[k] = round(v, nd)
+    return out
+
 def main():
     random.seed(RANDOM_SEED)
     args = parse_args()
@@ -1092,8 +1254,8 @@ def main():
         for r in rows_1v1:
             for k in list(r.keys()):
                 if isinstance(r[k], float):
-                    r[k] = round(r[k], 4)
-            w.writerow(r)
+                    r[k] = round(r[k], 4)        
+            w.writerow(rounded_copy(r, nd=6))
 
     # B) Healer scenario (mismos campos/condicionales)
     rows_healer = [simulate_many_with_healer(d, monster=monster) for d in DICE_TO_TEST]
@@ -1103,8 +1265,8 @@ def main():
         for r in rows_healer:
             for k in list(r.keys()):
                 if isinstance(r[k], float):
-                    r[k] = round(r[k], 4)
-            w.writerow(r)
+                    r[k] = round(r[k], 4)  
+            w.writerow(rounded_copy(r, nd=6))
             
         # C) Full Party scenario (mismos campos/condicionales)
     rows_full = [simulate_many_full_party(d, monster=monster) for d in DICE_TO_TEST]
@@ -1114,8 +1276,8 @@ def main():
         for r in rows_full:
             for k in list(r.keys()):
                 if isinstance(r[k], float):
-                    r[k] = round(r[k], 4)
-            w.writerow(r)
+                    r[k] = round(r[k], 4)  
+            w.writerow(rounded_copy(r, nd=6))
 
     # Console preview
     print(f"Monster selected: {mname}")
