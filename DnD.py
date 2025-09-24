@@ -7,8 +7,18 @@ N_SIMS = 10_000
 DICE_TO_TEST = [4, 6, 8, 10, 12, 20]  # warrior damage dice for 1v1
 RANDOM_SEED = 42
 
-# Core stats
+# Warrior stats
 WARRIOR = dict(HP=71, AC=16, ATK_MOD=3, DMG_MOD=3)
+
+# --- Warrior abilities (simple 5e-flavored model) ---
+WARRIOR_LEVEL = 10
+WARRIOR_CON_MOD = 2  # not directly used now, but handy if you want
+SECOND_WIND_THRESHOLD = 0.35   # heal when HP <= 35% of max
+ACTION_SURGE_USES = 1
+SUPERIORITY_DICE_N = 4         # Battlemaster dice count (lvl 10)
+SUPERIORITY_DIE_D = 10         # d10 at lvl 10
+POWER_ATTACK = dict(HIT_PENALTY=5, DMG_BONUS=10)  # GWM-like toggle (used when advantaged)
+
 
 #Healer stats
 #Cleric - HP: 63, AC: 12, ATK_MOD: 2, DMG_MOD: 2, DMG_DIE: 6
@@ -34,10 +44,8 @@ def heal_amount(spell: str, slot_level: int, mod: int) -> int:
     return 0
 
 #lvl 10 party members for full party scenario
-#Fighter - HP: 100, AC: 18, ATK_MOD: 5, DMG_MOD: 4, DMG_DIE: 10
 #Rogue - HP: 80, AC: 16, ATK_MOD: 6, DMG_MOD: 3, DMG_DIE: 8
 #Wizard - HP: 60, AC: 12, ATK_MOD: 4, DMG_MOD: 5, DMG_DIE: 6
-FIGHTER = dict(HP=100, AC=18, ATK_MOD=5, DMG_MOD=4, DMG_DIE=10)
 ROGUE   = dict(HP=80, AC=16, ATK_MOD=6, DMG_MOD=3, DMG_DIE=8)
 WIZARD  = dict(HP=60, AC=12, ATK_MOD=4, DMG_MOD=5, DMG_DIE=6)
 
@@ -94,6 +102,16 @@ def roll_attack():
 def dmg(die, mod, crit=False):
     return (roll(die) + roll(die) + mod) if crit else (roll(die) + mod)
 
+def roll_attack_adv(has_adv: bool):
+    if not has_adv:
+        r = roll(20)
+        return r, (r == 20), (r == 1)
+    r1, r2 = roll(20), roll(20)
+    crit = (r1 == 20) or (r2 == 20)
+    miss = (r1 == 1) and (r2 == 1)
+    r = max(r1, r2)
+    return r, crit, miss
+
 # ---------------------------
 # Initiative
 # ---------------------------
@@ -116,16 +134,27 @@ def initiative_order(names):
 def simulate_battle_1v1(w_die, monster=GIANT_APE):
     w_hp = WARRIOR["HP"]
     m_hp = monster["HP"]
+    max_w = WARRIOR["HP"]
+
     order = initiative_order(["warrior", "monster"])
     party_first = (order[0] == "warrior") # <- clave unificada
 
+    # Warrior resources / state
+    action_surge = ACTION_SURGE_USES
+    second_wind_available = True
+    sup_dice = SUPERIORITY_DICE_N
+    warrior_adv_next = False  # granted by Trip Attack for the NEXT attack
+
+    # First-attack flags (computed AFTER abilities resolution)
     first_warrior_attack_done = False
-    first_monster_attack_done = False
     first_attack_was_crit = False
     first_attack_was_miss = False
+
+    # Monster first-turn crit flag
+    first_monster_attack_done = False
     received_crit_first_turn = False
 
-    # crit streak tracking (warrior)
+    # Crit streak tracking (warrior)
     cur_streak = 0
     max_streak_in_battle = 0
     all_streaks = []
@@ -134,36 +163,101 @@ def simulate_battle_1v1(w_die, monster=GIANT_APE):
     while w_hp > 0 and m_hp > 0:
         actor = order[turn % 2]
         if actor == "warrior":
-            r, crit, miss = roll_attack()
-            if not first_warrior_attack_done:
-                first_attack_was_crit = crit
-                first_attack_was_miss = miss
-                first_warrior_attack_done = True
-            if miss:
-                if cur_streak > 0:
-                    all_streaks.append(cur_streak)
-                    max_streak_in_battle = max(max_streak_in_battle, cur_streak)
-                    cur_streak = 0
-            else:
-                hit = crit or ((r + WARRIOR["ATK_MOD"]) >= monster["AC"])
-                if hit:
+            # --- Second Wind (bonus-like): heal when low, does not consume attack here ---
+            if second_wind_available and (w_hp <= max_w * SECOND_WIND_THRESHOLD):
+                w_hp = min(max_w, w_hp + roll(10) + WARRIOR_LEVEL)
+                second_wind_available = False
+
+            # We may take 1 or 2 attacks (if Action Surge triggers)
+            attacks_this_turn = 1
+
+            # Closure to perform one attack with abilities
+            def do_one_attack(is_first_attack_of_warrior_turn):
+                nonlocal m_hp, cur_streak, max_streak_in_battle, all_streaks
+                nonlocal sup_dice, warrior_adv_next
+                nonlocal first_warrior_attack_done, first_attack_was_crit, first_attack_was_miss
+
+                # Advantage only if granted from a prior Trip Attack
+                has_adv = warrior_adv_next
+                warrior_adv_next = False  # consume it
+
+                # Decide Power Attack only when advantaged
+                use_power = has_adv
+                atk_mod = WARRIOR["ATK_MOD"] - (POWER_ATTACK["HIT_PENALTY"] if use_power else 0)
+                dmg_mod = WARRIOR["DMG_MOD"] + (POWER_ATTACK["DMG_BONUS"] if use_power else 0)
+
+                # Roll attack (with possible advantage)
+                r, crit, miss = roll_attack_adv(has_adv)
+                raw_hit = False
+                final_hit = False
+
+                if not miss:
+                    # Check raw hit vs AC
+                    raw_hit = crit or ((r + atk_mod) >= monster["AC"])
+
+                    # Precision Strike: salvage misses by <= d10 if resources remain
+                    if (not raw_hit) and (sup_dice > 0):
+                        need = monster["AC"] - (r + atk_mod)
+                        if 1 <= need <= SUPERIORITY_DIE_D:
+                            sup_dice -= 1
+                            add = roll(SUPERIORITY_DIE_D)
+                            raw_hit = (crit or ((r + add + atk_mod) >= monster["AC"]))
+                    final_hit = raw_hit
+
+                # Record first-attack flags AFTER resolution with abilities
+                if is_first_attack_of_warrior_turn and (not first_warrior_attack_done):
+                    first_warrior_attack_done = True
+                    first_attack_was_crit = crit
+                    first_attack_was_miss = (not final_hit)
+
+                if final_hit:
+                    # Trip Attack: add damage and grant advantage next attack if we have dice
+                    extra = 0
+                    do_trip = (sup_dice > 0) and (not has_adv) and (m_hp > 0.5 * monster["HP"])
+                    if do_trip:
+                        sup_dice -= 1
+                        extra = roll(SUPERIORITY_DIE_D)
+                        warrior_adv_next = True  # grants adv on NEXT attack
+
                     if crit:
+                        # crit doubles weapon dice only (we won't double the superiority die)
+                        dmg_total = roll(w_die) + roll(w_die) + dmg_mod + extra
                         cur_streak += 1
                     else:
                         if cur_streak > 0:
                             all_streaks.append(cur_streak)
                             max_streak_in_battle = max(max_streak_in_battle, cur_streak)
                             cur_streak = 0
-                    m_hp -= dmg(w_die, WARRIOR["DMG_MOD"], crit)
+                        dmg_total = roll(w_die) + dmg_mod + extra
+
+                    m_hp -= dmg_total
                 else:
+                    # miss: end any ongoing streak
                     if cur_streak > 0:
                         all_streaks.append(cur_streak)
                         max_streak_in_battle = max(max_streak_in_battle, cur_streak)
                         cur_streak = 0
+
+            # First attack
+            do_one_attack(is_first_attack_of_warrior_turn=True)
+
+            # Consider Action Surge for a second attack right now
+            if (m_hp > 0) and (action_surge > 0):
+                # Heuristic: surge if (i) we crit OR (ii) we can likely finish now
+                avg_weapon = (w_die + 1) / 2
+                expected_next = avg_weapon + WARRIOR["DMG_MOD"] + (POWER_ATTACK["DMG_BONUS"] if warrior_adv_next else 0)
+                if first_attack_was_crit or (m_hp <= 1.2 * expected_next):
+                    action_surge -= 1
+                    attacks_this_turn += 1
+
+            if attacks_this_turn == 2 and m_hp > 0:
+                do_one_attack(is_first_attack_of_warrior_turn=False)
+
         else:
             r, crit, miss = roll_attack()
             if not first_monster_attack_done:
-                if crit: received_crit_first_turn = True
+                if crit:
+                    received_crit_first_turn = True
                 first_monster_attack_done = True
             if not miss:
                 hit = crit or ((r + monster["ATK_MOD"]) >= WARRIOR["AC"])
@@ -235,11 +329,19 @@ def simulate_battle_with_healer(w_die=10, monster=GIANT_APE):
     order = initiative_order(["warrior","healer","monster"])
     party_first = (min(order.index("warrior"), order.index("healer")) < order.index("monster"))
 
+    # Warrior resources / state
+    action_surge = ACTION_SURGE_USES
+    second_wind_available = True
+    sup_dice = SUPERIORITY_DICE_N
+    warrior_adv_next = False
+
     # Flags para condiciones (del GUERRERO y del 1er ataque del MONSTRUO)
     first_warrior_attack_done = False
-    first_monster_attack_done = False
     first_attack_was_crit = False
     first_attack_was_miss = False
+
+    # Monster first-turn crit
+    first_monster_attack_done = False
     received_crit_first_turn = False
 
     # Racha de críticos del guerrero
@@ -247,34 +349,87 @@ def simulate_battle_with_healer(w_die=10, monster=GIANT_APE):
     max_streak_in_battle = 0
     all_streaks = []
 
+    def best_available(predicate):
+        candidates = [lvl for lvl, cnt in slots.items() if cnt > 0 and predicate(lvl, cnt)]
+        return max(candidates) if candidates else 0
+
     t = 0
     while w_hp > 0 and h_hp > 0 and m_hp > 0:
         actor = order[t % 3]
         if actor == "warrior":
-            r, crit, miss = roll_attack()
-            if not first_warrior_attack_done:
-                first_attack_was_crit = crit
-                first_attack_was_miss = miss
-                first_warrior_attack_done = True
-            if not miss:
-                hit = crit or ((r + WARRIOR["ATK_MOD"]) >= monster["AC"])
-                if hit:
+            # Second Wind (bonus-like)
+            if second_wind_available and (w_hp <= max_w * SECOND_WIND_THRESHOLD):
+                w_hp = min(max_w, w_hp + roll(10) + WARRIOR_LEVEL)
+                second_wind_available = False
+
+            # Attack (and maybe Action Surge)
+            def do_one_attack(is_first_attack_of_warrior_turn):
+                nonlocal m_hp, cur_streak, max_streak_in_battle, all_streaks
+                nonlocal sup_dice, warrior_adv_next
+                nonlocal first_warrior_attack_done, first_attack_was_crit, first_attack_was_miss
+
+                has_adv = warrior_adv_next
+                warrior_adv_next = False
+
+                use_power = has_adv
+                atk_mod = WARRIOR["ATK_MOD"] - (POWER_ATTACK["HIT_PENALTY"] if use_power else 0)
+                dmg_mod = WARRIOR["DMG_MOD"] + (POWER_ATTACK["DMG_BONUS"] if use_power else 0)
+
+                r, crit, miss = roll_attack_adv(has_adv)
+                raw_hit = False
+                final_hit = False
+
+                if not miss:
+                    raw_hit = crit or ((r + atk_mod) >= monster["AC"])
+                    if (not raw_hit) and (sup_dice > 0):
+                        need = monster["AC"] - (r + atk_mod)
+                        if 1 <= need <= SUPERIORITY_DIE_D:
+                            sup_dice -= 1
+                            add = roll(SUPERIORITY_DIE_D)
+                            raw_hit = (crit or ((r + add + atk_mod) >= monster["AC"]))
+                    final_hit = raw_hit
+
+                if is_first_attack_of_warrior_turn and (not first_warrior_attack_done):
+                    first_warrior_attack_done = True
+                    first_attack_was_crit = crit
+                    first_attack_was_miss = (not final_hit)
+
+                if final_hit:
+                    extra = 0
+                    do_trip = (sup_dice > 0) and (not has_adv) and (m_hp > 0.5 * monster["HP"])
+                    if do_trip:
+                        sup_dice -= 1
+                        extra = roll(SUPERIORITY_DIE_D)
+                        warrior_adv_next = True
+
                     if crit:
+                        dmg_total = roll(w_die) + roll(w_die) + dmg_mod + extra
                         cur_streak += 1
                     else:
                         if cur_streak > 0:
                             all_streaks.append(cur_streak)
                             max_streak_in_battle = max(max_streak_in_battle, cur_streak)
                             cur_streak = 0
-                    m_hp -= dmg(w_die, WARRIOR["DMG_MOD"], crit)
-            else:
-                if cur_streak > 0:
-                    all_streaks.append(cur_streak)
-                    max_streak_in_battle = max(max_streak_in_battle, cur_streak)
-                    cur_streak = 0
+                        dmg_total = roll(w_die) + dmg_mod + extra
+                    m_hp -= dmg_total
+                else:
+                    if cur_streak > 0:
+                        all_streaks.append(cur_streak)
+                        max_streak_in_battle = max(max_streak_in_battle, cur_streak)
+                        cur_streak = 0
+
+            # First attack
+            do_one_attack(is_first_attack_of_warrior_turn=True)
+
+            # Action Surge?
+            if (m_hp > 0) and (action_surge > 0):
+                avg_weapon = (w_die + 1) / 2
+                expected_next = avg_weapon + WARRIOR["DMG_MOD"] + (POWER_ATTACK["DMG_BONUS"] if warrior_adv_next else 0)
+                if first_attack_was_crit or (m_hp <= 1.2 * expected_next):
+                    action_surge -= 1
+                    do_one_attack(is_first_attack_of_warrior_turn=False)
 
         elif actor == "healer":
-            # si ambos están a full HP, el healer ataca al monstruo
             if (w_hp >= max_w) and (h_hp >= max_h):
                 r, crit, miss = roll_attack()
                 if not miss:
@@ -282,31 +437,26 @@ def simulate_battle_with_healer(w_die=10, monster=GIANT_APE):
                     if hit:
                         m_hp -= dmg(HEALER["DMG_DIE"], HEALER["DMG_MOD"], crit)
             else:
-                # Decide spell + slot based on injuries & availability
                 both_injured = (w_hp < max_w) and (h_hp < max_h)
-                someone_low  = (w_hp < max_w*0.5) or (h_hp < max_h*0.5)
+                someone_low  = (w_hp < max_w * 0.5) or (h_hp < max_h * 0.5)
 
-                chosen = None  # (spell_name, slot_level)
-                # Prefer Mass Healing Word if both are hurt and we have >=3rd slot
+                chosen = None
                 if both_injured:
-                    avail = max([lvl for lvl,cnt in slots.items() if cnt>0 and lvl>=3], default=0)
-                    if avail >= 3:
-                        chosen = ("mass_healing_word", avail)
-
-                # If someone is low, use best Cure Wounds available
+                    lvl = best_available(lambda L, C: L >= 3)
+                    if lvl >= 3:
+                        chosen = ("mass_healing_word", lvl)
                 if (chosen is None) and someone_low:
-                    avail = max([lvl for lvl,cnt in slots.items() if cnt>0], default=0)
-                    if avail >= 1:
-                        chosen = ("cure_wounds", avail)
-
-                # Otherwise, top up lightly with Healing Word if we have low slots
+                    lvl = best_available(lambda L, C: True)
+                    if lvl >= 1:
+                        chosen = ("cure_wounds", lvl)
                 if (chosen is None) and ((w_hp < max_w) or (h_hp < max_h)):
-                    avail = max([lvl for lvl,cnt in slots.items() if cnt>0 and lvl<=2], default=0)
-                    if avail >= 1:
-                        chosen = ("healing_word", avail)
+                    lvl = best_available(lambda L, C: L <= 2)
+                    if lvl == 0:
+                        lvl = best_available(lambda L, C: True)
+                    if lvl >= 1:
+                        chosen = ("healing_word", lvl)
 
                 if chosen is None:
-                    # No slots or no need -> attack
                     r, crit, miss = roll_attack()
                     if not miss:
                         hit = crit or ((r + HEALER["ATK_MOD"]) >= monster["AC"])
@@ -329,7 +479,8 @@ def simulate_battle_with_healer(w_die=10, monster=GIANT_APE):
             target_is_h = (h_hp <= w_hp)  # ties -> healer
             r, crit, miss = roll_attack()
             if not first_monster_attack_done:
-                if crit: received_crit_first_turn = True
+                if crit:
+                    received_crit_first_turn = True
                 first_monster_attack_done = True
             if not miss:
                 target_ac = HEALER["AC"] if target_is_h else WARRIOR["AC"]
