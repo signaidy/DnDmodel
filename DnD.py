@@ -1,9 +1,11 @@
 import random, statistics, csv, argparse
+from pathlib import Path
+
 import numpy as np
 import matplotlib
+matplotlib.use('Agg') #for headless servers
 import matplotlib.pyplot as plt
-
-matplotlib.use('Agg')  # for headless servers
+from matplotlib.patches import Patch
 # ---------------------------
 # Tunables
 # ---------------------------
@@ -132,6 +134,28 @@ DOOM_MARAUDER.update(dict(
     WOLF=dict(TRIGGER_PCT=0.60, DURATION=4, DIE=10, MOD=3)
 ))
 
+# ---------- Output directories ----------
+CSV_BASE   = Path("csv")
+GRAPH_BASE = Path("graphs")
+
+def ensure_dir(p: Path):
+    p.mkdir(parents=True, exist_ok=True)
+
+def monster_csv_dir(monster_key: str) -> Path:
+    d = CSV_BASE / monster_key
+    ensure_dir(d)
+    return d
+
+def monster_graph_dir(monster_key: str) -> Path:
+    d = GRAPH_BASE / monster_key
+    ensure_dir(d)
+    return d
+
+def all_monsters_graph_dir() -> Path:
+    d = GRAPH_BASE / "_ALL_MONSTERS"
+    ensure_dir(d)
+    return d
+
 # ---------------------------
 # Helpers
 # ---------------------------
@@ -244,6 +268,8 @@ def summarize_many(sim_fn, w_die, monster, n_sims=10_000):
     }
     
 def write_csv(path, rows):
+    path = Path(path)
+    ensure_dir(path.parent)
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         w.writeheader()
@@ -1041,7 +1067,8 @@ def plot_per_monster(monster_key: str,
     width = 0.27
 
     metrics = _numeric_metrics(rows_solo)  # same schema for all three
-    # One graph per metric
+    out_dir = monster_graph_dir(monster_key)
+
     for metric in metrics:
         y_solo  = [r[metric] for r in rows_solo]
         y_heal  = [r[metric] for r in rows_heal]
@@ -1059,7 +1086,7 @@ def plot_per_monster(monster_key: str,
         ax.legend()
         fig.tight_layout()
 
-        fname = f"plot_{_sanitize_filename(metric)}_{monster_key}.png"
+        fname = out_dir / f"plot_{_sanitize_filename(metric)}_{monster_key}.png"
         fig.savefig(fname, dpi=150)
         plt.close(fig)
         
@@ -1068,7 +1095,7 @@ def plot_all_monsters(results_by_monster: dict[str, dict[str, list[dict]]]):
     if not results_by_monster:
         return
 
-    # Pick any monster to derive metric keys & dice labels
+    # Use any monster to derive metric keys & dice labels
     sample_monster = next(iter(results_by_monster))
     dice_labels = _ensure_same_dice(results_by_monster[sample_monster]['solo'])
     n_dice = len(dice_labels)
@@ -1077,33 +1104,35 @@ def plot_all_monsters(results_by_monster: dict[str, dict[str, list[dict]]]):
     team_keys = [("solo", "Solo"), ("healer", "Healer"), ("full", "Full Party")]
     monsters = list(results_by_monster.keys())
     x = np.arange(len(monsters))
-    width = 0.8 / n_dice  # fit all dice per monster nicely
+    width = 0.8 / n_dice  # fit all dice per monster
+
+    # Consistent colors per die + proper legend using proxy patches
+    color_cycle = plt.rcParams['axes.prop_cycle'].by_key().get('color', plt.cm.tab10.colors)
+    colors = [color_cycle[i % len(color_cycle)] for i in range(n_dice)]
+    legend_patches = [Patch(facecolor=colors[i], label=dlabel) for i, dlabel in enumerate(dice_labels)]
+
+    out_dir = all_monsters_graph_dir()
 
     for metric in metrics:
         for team_key, team_label in team_keys:
             fig, ax = plt.subplots(figsize=(12, 6))
-            # For each die, plot a bar per monster with an offset
             for i, dlabel in enumerate(dice_labels):
-                # Gather y across monsters for this die and team
                 ys = []
                 for m in monsters:
                     rows = results_by_monster[m][team_key]
-                    # rows are ordered by dice; get the index by label safely
                     idx = [row["warrior_die"] for row in rows].index(dlabel)
                     ys.append(rows[idx][metric])
-                ax.bar(x + (i - (n_dice-1)/2) * width, ys, width, label=dlabel if i == 0 else None)
+                # One bar per monster, offset by die index; color fixed per die
+                ax.bar(x + (i - (n_dice - 1) / 2) * width, ys, width, color=colors[i])
 
             ax.set_xlabel("Monster")
             ax.set_ylabel("Data Value")
             ax.set_title(f"{metric} - All Monsters - {team_label}")
             ax.set_xticks(x, monsters)
-            # Single legend showing dice labels (attach only once)
-            handles, _ = ax.get_legend_handles_labels()
-            if handles:
-                ax.legend(title="Damage Die")
+            ax.legend(handles=legend_patches, title="Damage Die")
             fig.tight_layout()
 
-            fname = f"final_{_sanitize_filename(metric)}_{_sanitize_filename(team_key)}_all_monsters.png"
+            fname = out_dir / f"final_{_sanitize_filename(metric)}_{_sanitize_filename(team_key)}_all_monsters.png"
             fig.savefig(fname, dpi=150)
             plt.close(fig)
 
@@ -1113,24 +1142,24 @@ def run_suite_for_monster(monster_key: str, n_sims: int):
     rows_heal = [summarize_many(simulate_battle_with_healer, d, monster, n_sims) for d in DICE_TO_TEST]
     rows_full = [summarize_many(simulate_battle_full_party,  d, monster, n_sims) for d in DICE_TO_TEST]
 
-    suffix = f"_{monster_key}" if monster_key else ""
-    write_csv(f"dnd_1v1_summaries{suffix}.csv", rows_1v1)
-    write_csv(f"dnd_healer_summaries{suffix}.csv", rows_heal)
-    write_csv(f"dnd_fullparty_summaries{suffix}.csv", rows_full)
+    # Write CSVs into csv/<MONSTER>/
+    out_csv = monster_csv_dir(monster_key)
+    write_csv(out_csv / "dnd_1v1_summaries.csv", rows_1v1)
+    write_csv(out_csv / "dnd_healer_summaries.csv", rows_heal)
+    write_csv(out_csv / "dnd_fullparty_summaries.csv", rows_full)
 
-    # Per-monster grouped bar charts
+    # Per-monster grouped bar charts into graphs/<MONSTER>/
     plot_per_monster(monster_key, rows_1v1, rows_heal, rows_full)
 
-    print(f"Monster selected: {monster_key}")
+    print(f"Monster: {monster_key}")
     print("---- 1v1 summaries ----")
     for r in rows_1v1: print(r)
     print("\n---- Healer summaries ----")
     for r in rows_heal: print(r)
     print("\n---- Full Party summaries ----")
     for r in rows_full: print(r)
-    print(f"\nFiles written: dnd_1v1_summaries{suffix}.csv, dnd_healer_summaries{suffix}.csv, dnd_fullparty_summaries{suffix}.csv\n")
+    print(f"\nFiles written in {out_csv} and {monster_graph_dir(monster_key)}\n")
 
-    # Return for final all-monsters plots
     return {"solo": rows_1v1, "healer": rows_heal, "full": rows_full}
 
 def main():
