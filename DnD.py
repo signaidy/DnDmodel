@@ -150,19 +150,31 @@ YOUNG_BLUE_DRAGON.update(dict(
 
 # --- Homebrew: Doom Marauder ---
 DOOM_MARAUDER.update(dict(
-    ATTACKS=2,                                  # axe + shotgun vibe
-    # Reaction: on a miss against the Marauder, it makes one counter attack (1/round)
+    # Make basic swings matter
+    ATK_MOD=6,              # was 3
+    ATTACKS=3,              # was 2
+
+    # Reaction: once per round, on a miss against the Marauder
     COUNTER_ON_MISS=True,
     COUNTER_DAMAGE_DIE=12,
-    COUNTER_DAMAGE_MOD=3,
+    COUNTER_DAMAGE_MOD=5,   # was 3
 
-    # Anti-spell feel
-    SPELL_RESIST_AC_BONUS=3,                    # tougher vs spell attack rolls (Orb/Bolt)
-    AUTO_SPELL_RESIST_PCT=0.5,                  # halves auto-hit spell damage (Magic Missile)
+    # Anti-caster
+    SPELL_RESIST_AC_BONUS=3,    # vs Orb/Bolt (attack-roll spells)
+    AUTO_SPELL_RESIST_PCT=0.5,  # halves Magic Missile
 
-    # Spectral wolf: summoned once when <= 60% HP; bites for 3 rounds
-    WOLF=dict(TRIGGER_PCT=0.60, DURATION=3, DIE=8, MOD=2)
+    # Shotgun AOE  (abstracted)
+    BREATH=dict(
+        N_DICE=6,               # 6d8 to each alive target
+        DIE=8,
+        RECHARGE=[5, 6],        # ~33% per turn after use
+        SAVE_SUCCESS_P=0.5      # simple half-on-save stand-in
+    ),
+
+    # Wolf buddy (abstracted)
+    WOLF=dict(TRIGGER_PCT=0.60, DURATION=4, DIE=10, MOD=3)  # was 3 rounds of d8+2
 ))
+
 
 
 
@@ -1017,54 +1029,64 @@ def simulate_battle_full_party(w_die=10, monster=GIANT_APE):
                     healer_slots[lvl] -= 1  # consume slot
 
         elif actor == "rogue" and r_hp > 0 and monster["HP"] > 0:
-            # Advantage if Steady Aim (no ally before rogue this round) or if an ally already attacked
-            has_adv = allies_attacked_this_round or (ROGUE_STEADY_AIM and not allies_attacked_this_round)
+            # Advantage ONLY from Steady Aim if no ally has already attacked this round
+            has_adv = (ROGUE_STEADY_AIM and not allies_attacked_this_round)
+            # Sneak Attack is available if you have advantage OR an ally already attacked
+            sa_available = has_adv or allies_attacked_this_round
 
             r, crit, miss = roll_attack_adv(has_adv)
             if not miss and (crit or (r + ROGUE["ATK_MOD"]) >= monster_effective_ac(monster)):
                 # Weapon damage
                 weapon = (roll(ROGUE["DMG_DIE"]) + (roll(ROGUE["DMG_DIE"]) if crit else 0)) + ROGUE["DMG_MOD"]
-                # Sneak Attack (once per turn): available due to adv or ally engagement
-                sa_dice = SNEAK_ATTACK_DICE * (2 if crit else 1)
-                sneak = sum(roll(SNEAK_ATTACK_DIE) for _ in range(sa_dice))
-                monster["HP"] -= (weapon + sneak)
+
+                total = weapon
+                if sa_available:
+                    sa_dice = SNEAK_ATTACK_DICE * (2 if crit else 1)
+                    total += sum(roll(SNEAK_ATTACK_DIE) for _ in range(sa_dice))
+
+                monster["HP"] -= total
             else:
                 marauder_counter(attacker_name="rogue")
+
             allies_attacked_this_round = True
 
         elif actor == "wizard" and z_hp > 0 and monster["HP"] > 0:
-            # Choose spell: finish with Magic Missile if its expected damage >= remaining HP, else Chromatic Orb with highest slot, else Fire Bolt.
+            did_attack_roll = False
             high = wizard_highest_slot(wizard_slots)
             if high > 0:
                 # Expected MM damage
                 mm_darts = high + 2
-                expected_mm = mm_darts * 3.5  # E[1d4+1]=3.5                
+                expected_mm = mm_darts * 3.5
                 if monster.get("AUTO_SPELL_RESIST_PCT"):
                     expected_mm *= (1 - monster["AUTO_SPELL_RESIST_PCT"])
+
                 if expected_mm >= monster["HP"]:
-                    # Finish with Magic Missile (auto-hit)
+                    # Magic Missile – no attack roll
                     dmg_mm = wizard_magic_missile_damage(high)
                     if monster.get("AUTO_SPELL_RESIST_PCT"):
                         dmg_mm = int(round(dmg_mm * (1 - monster["AUTO_SPELL_RESIST_PCT"])))
                     monster["HP"] -= dmg_mm
                     wizard_slots[high] -= 1
                 else:
-                    # Chromatic Orb (attack roll, crit doubles dice)
+                    # Chromatic Orb – attack roll
                     r, crit, miss = roll_attack()
+                    did_attack_roll = True
                     if not miss and (crit or (r + WIZARD["ATK_MOD"]) >= monster_effective_ac(monster, is_spell_attack=True)):
                         monster["HP"] -= wizard_chromatic_orb_damage(high, crit)
                     else:
                         marauder_counter(attacker_name="wizard")
-                    # spend slot regardless of hit/miss
                     wizard_slots[high] -= 1
             else:
-                # Fire Bolt cantrip (attack roll)
+                # Fire Bolt – attack roll
                 r, crit, miss = roll_attack()
+                did_attack_roll = True
                 if not miss and (crit or (r + WIZARD["ATK_MOD"]) >= monster_effective_ac(monster, is_spell_attack=True)):
                     monster["HP"] -= wizard_fire_bolt_damage(crit)
                 else:
                     marauder_counter(attacker_name="wizard")
-            allies_attacked_this_round = True
+
+            if did_attack_roll:
+                allies_attacked_this_round = True
 
         elif actor == "monster" and monster["HP"] > 0:
             # Regen up to max
