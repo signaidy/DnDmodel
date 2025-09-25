@@ -18,9 +18,8 @@ math: katex
 **Objetivo**
 
 - Explicar cómo modelamos cada parte del combate.
-- Precisar qué **distribución** usa cada componente.
 - Responder preguntas clave sobre probabilidad de ganar bajo diferentes condiciones.
-- Mostrar gráficas comparativas por monstruo y entre monstruos.
+- Mostrar gráficas comparativas por entre monstruos de diferentes niveles contralas diferentes composición de equipo.
 
 ---
 
@@ -28,9 +27,8 @@ math: katex
 
 1. Flujo del combate
 2. Componentes y distribuciones
-3. Métricas y estimación
-4. Resultados (cómo leerlos)
-5. Escenarios extra (Healer / Party completa)
+3. Métricas
+4. Resultados
 6. Supuestos y limitaciones
 
 ---
@@ -162,149 +160,6 @@ La **elección** de hechizo y objetivo sigue una **política determinista** (seg
 
 ---
 
-# Rogue (Pícaro)
-
-- To-hit: como antes (con posible ventaja por Steady Aim).
-- Daño base: $1d8+\text{DMG\_MOD}$.
-- Sneak Attack: $S$ dados d6 (aquí $S=5$); en crítico se **duplican todos** los dados:
-
-$$
-D_{\text{crit}} = 2d8 + 2S\cdot d6 + \text{DMG\_MOD}.
-$$
-
-- Uncanny Dodge: primer golpe **no crítico** recibido en la ronda se **divide a la mitad** (transformación determinista sobre la muestra).
-
----
-
-# Wizard (Mago)
-
-- **Magic Missile (nivel $L$)**: nº dardos $=L+2$.  
-  Cada dardo $X \sim (1d4+1)$. Total $T=\sum X_i$.  
-  Si hay resistencia automática $q$: $T'=\lfloor (1-q)T \rfloor$.
-- **Chromatic Orb (nivel $L$)**:  
-  $T \sim \sum_{i=1}^{L+2} 1d8$ (doblar nº de dados en crítico).
-- **Fire Bolt** (cantrip a nivel 10 en este modelo):  
-  normal $= 2\times 1d10$, crítico $= 4\times 1d10$.
-- **Shield**: anula golpes dentro del rango $[\text{AC},\text{AC}+5)$ si hay slot (gating inducido por la tirada enemiga).
-
----
-
-# Rasgos de Monstruo
-
-- **Multiataque**: repeticiones i.i.d. del esquema hit/daño.
-- **Aliento / AoE**:
-
-$$
-B \sim \sum_{i=1}^{N} 1dD, \quad
-\text{daño a cada objetivo} =
-\begin{cases}
-B & \text{si falla la salvación}\\[4pt]
-\lfloor B/2 \rfloor & \text{si la supera}
-\end{cases}
-$$
-
-Si hay **cargas** disponibles, se puede aplicar $\times 2$ si eso mata (decisión determinista).
-
----
-
-# Rasgos de Monstruo
-
-- **Recarga** (p. ej. “5–6”): por turno
-
-$$
-R\sim 1d6,\quad P(\text{listo}) = \frac{2}{6},\;
-\text{tiempo de espera} \sim \mathrm{Geom}\!\left(\tfrac{2}{6}\right).
-$$
-
-- **Regeneración**: +HP determinista por turno.
-- **Counter on miss**: ataque estándar cuando el rival falla.
-- **Invocar lobo**: se activa al cruzar umbral de HP; luego $T$ turnos de daño $1dD+\text{MOD}$.
-
----
-
-# Métricas que estimamos (por combinación de dado y composición)
-
-Para cada simulación guardamos flags y medidas; a partir de $n$ repeticiones:
-
-- **Baseline**: $\hat p_0 = P(\text{win})$.
-- **Condicionadas**:
-
-$$
-\hat p_{\text{PF}} = P(\text{win}\mid \text{party first}),
-\qquad
-\hat p_{\text{FC}} = P(\text{win}\mid \text{primer ataque crit}).
-$$
-
----
-
-# Métricas que estimamos (por combinación de dado y composición)
-
-- **Impactos marginales (deltas)**:
-
-$$
-\Delta_{\text{miss1}} = P(\text{win}\mid \text{fallé primer ataque}) - \hat p_0,
-\qquad
-\Delta_{\text{recibí crit1}} = P(\text{win}\mid \text{recibí crit en turno 1}) - \hat p_0.
-$$
-
-- **Rachas de críticos** (longitudes consecutivas $>0$): mínimo, máximo, promedio.
-
----
-
-# Estimación Monte Carlo y errores
-
-Sea $\hat p = \tfrac{1}{n}\sum_{i=1}^n \mathbf{1}\{\text{evento}_i\}$.  
-Para $n$ grande, por CLT:
-
-$$
-\hat p \approx \mathcal{N}\!\Big(p,\, \tfrac{p(1-p)}{n}\Big),
-\qquad
-\text{IC 95\%} \approx \hat p \pm 1.96\sqrt{\tfrac{\hat p(1-\hat p)}{n}}.
-$$
-
-Diferencias de proporciones $\hat p_a - \hat p_b$: aproximación normal con varianza suma (si independientes) o teniendo en cuenta covarianza (si comparten muestra).
-
----
-
-# Cómo leer las gráficas (por monstruo)
-
-- **Eje X**: dado de daño del Guerrero (d4, d6, …).
-- **Barras por X**: **Solo**, **Healer**, **Party completa** (colores distintos).
-- **Eje Y**: valor de la métrica (probabilidad o conteo esperado).
-- **Título**: “{métrica} – {monstruo}”.
-
-> Inserta aquí, por monstruo, la colección de gráficas (una por métrica):
->
-> `![baseline_P(win) – CLOAKER](graphs/CLOAKER/plot_baseline_P_win__CLOAKER.png)`  
-> `![P(win | party first) – CLOAKER](graphs/CLOAKER/plot_P_win___party_first__CLOAKER.png)`
-
----
-
-# Cómo leer las gráficas (entre monstruos)
-
-- **Eje X**: monstruo.
-- **Barras por X**: una barra por **dado** (colores fijos por dado).
-- **Series**: una figura por **métrica** y **composición** (Solo / Healer / Party).
-- **Leyenda**: color ↔ dado (d4, d6, …).
-
-> Inserta aquí, por métrica y composición, las “final_*.png”:
->
-> `![baseline_P(win) – All – Solo](graphs/_ALL_MONSTERS/final_baseline_P_win__solo_all_monsters.png)`
-
----
-
-# Preguntas que respondemos (por monstruo y global)
-
-- $P(\text{win} \mid \text{party first})$.
-- $P(\text{win} \mid \text{primer ataque crítico})$.
-- $\Delta_{\text{miss1}} = P(\text{win}\mid \text{fallo primer ataque}) - P(\text{win})$.
-- $\Delta_{\text{recibí crit1}} = P(\text{win}\mid \text{recibir crit en turno 1}) - P(\text{win})$.
-- Rachas de críticos: **mínimo**, **máximo**, **promedio (>0)**.
-
-*(Todos estos valores aparecen en los CSV y en las gráficas por métrica.)*
-
----
-
 # Composición con Healer
 
 **Escenario**: Guerrero L10 + Healer L10 vs 1 monstruo  
@@ -426,6 +281,264 @@ else:
 
 ---
 
+# Rogue
+
+- To-hit: como antes (con posible ventaja por Steady Aim).
+- Daño base: $1d8+\text{DMG\_MOD}$.
+- Sneak Attack: $S$ dados d6 (aquí $S=5$); en crítico se **duplican todos** los dados:
+
+$$
+D_{\text{crit}} = 2d8 + 2S\cdot d6 + \text{DMG\_MOD}.
+$$
+
+- Uncanny Dodge: primer golpe **no crítico** recibido en la ronda se **divide a la mitad** (transformación determinista sobre la muestra).
+
+---
+
+# Wizard
+
+- **Magic Missile (nivel $L$)**: nº dardos $=L+2$.  
+  Cada dardo $X \sim (1d4+1)$. Total $T=\sum X_i$.  
+  Si hay resistencia automática $q$: $T'=\lfloor (1-q)T \rfloor$.
+- **Chromatic Orb (nivel $L$)**:  
+  $T \sim \sum_{i=1}^{L+2} 1d8$ (doblar nº de dados en crítico).
+- **Fire Bolt** (cantrip a nivel 10 en este modelo):  
+  normal $= 2\times 1d10$, crítico $= 4\times 1d10$.
+- **Shield**: anula golpes dentro del rango $[\text{AC},\text{AC}+5)$ si hay slot (gating inducido por la tirada enemiga).
+
+---
+
+# Rasgos de Monstruo
+
+- **Multiataque**: repeticiones i.i.d. del esquema hit/daño.
+- **Aliento / AoE**:
+
+$$
+B \sim \sum_{i=1}^{N} 1dD, \quad
+\text{daño a cada objetivo} =
+\begin{cases}
+B & \text{si falla la salvación}\\[4pt]
+\lfloor B/2 \rfloor & \text{si la supera}
+\end{cases}
+$$
+
+Si hay **cargas** disponibles, se puede aplicar $\times 2$ si eso mata (decisión determinista).
+
+---
+
+# Rasgos de Monstruo
+
+- **Recarga** (p. ej. “5–6”): por turno
+
+$$
+R\sim 1d6,\quad P(\text{listo}) = \frac{2}{6},\;
+\text{tiempo de espera} \sim \mathrm{Geom}\!\left(\tfrac{2}{6}\right).
+$$
+
+- **Regeneración**: +HP determinista por turno.
+- **Counter on miss**: ataque estándar cuando el rival falla.
+- **Invocar lobo**: se activa al cruzar umbral de HP; luego $T$ turnos de daño $1dD+\text{MOD}$.
+
+---
+
+# Métricas que estimamos (por combinación de dado y composición)
+
+Para cada simulación guardamos flags y medidas; a partir de $n$ repeticiones:
+
+- **Baseline**: $\hat p_0 = P(\text{win})$.
+- **Condicionadas**:
+
+$$
+\hat p_{\text{PF}} = P(\text{win}\mid \text{party first}),
+\qquad
+\hat p_{\text{FC}} = P(\text{win}\mid \text{primer ataque crit}).
+$$
+
+---
+
+# Métricas que estimamos (por combinación de dado y composición)
+
+- **Impactos marginales (deltas)**:
+
+$$
+\Delta_{\text{miss1}} = P(\text{win}\mid \text{fallé primer ataque}) - \hat p_0,
+\qquad
+\Delta_{\text{recibí crit1}} = P(\text{win}\mid \text{recibí crit en turno 1}) - \hat p_0.
+$$
+
+- **Rachas de críticos** (longitudes consecutivas $>0$): mínimo, máximo, promedio.
+
+---
+
+# Estimación Monte Carlo y errores
+
+Sea $\hat p = \tfrac{1}{n}\sum_{i=1}^n \mathbf{1}\{\text{evento}_i\}$.  
+Para $n$ grande, por CLT:
+
+$$
+\hat p \approx \mathcal{N}\!\Big(p,\, \tfrac{p(1-p)}{n}\Big),
+\qquad
+\text{IC 95\%} \approx \hat p \pm 1.96\sqrt{\tfrac{\hat p(1-\hat p)}{n}}.
+$$
+
+Diferencias de proporciones $\hat p_a - \hat p_b$: aproximación normal con varianza suma (si independientes) o teniendo en cuenta covarianza (si comparten muestra).
+
+---
+
+# Preguntas clave que respondemos
+
+- ¿Cuál es la **probabilidad de ganar** contra el **monstruo**?
+- $P(\text{win})$.
+- ¿Cuál es la **probabilidad de ganar** dado que la **party ataca primero**?
+- $P(\text{win} \mid \text{party first})$.
+- ¿Cuál es la **probabilidad de ganar** dado que **mi primer ataque fue crítico**?
+- $P(\text{win} \mid \text{primer ataque crítico})$.
+
+`(Todos estos valores aparecen en los CSV y en las gráficas por métrica.)`
+
+---
+
+# Preguntas clave que respondemos
+
+- ¿En cuánto **disminuye** mi probabilidad de ganar si **fallo el primer ataque**?
+- $\Delta_{\text{miss1}} = P(\text{win}\mid \text{fallo primer ataque}) - P(\text{win})$.
+- ¿En cuánto **disminuye** mi probabilidad de ganar si **recibo un crítico en el primer turno**?
+- $\Delta_{\text{recibí crit1}} = P(\text{win}\mid \text{recibir crit en turno 1}) - P(\text{win})$.
+- ¿Cuál es el **mínimo**, **máximo** y **promedio (>0)** de **rachas de críticos** consecutivos?
+
+`(Todos estos valores aparecen en los CSV y en las gráficas por métrica.)`
+
+---
+
+# Gráficas entre monstruos
+
+- **Eje X**: monstruo.
+- **Barras por X**: una barra por **dado** (colores fijos por dado).
+- **Series**: una figura por **métrica** y **composición** (Solo / Healer / Party).
+- **Leyenda**: color ↔ dado (d4, d6, …).
+
+---
+
+# Comparativa — Prob. base de victoria (Solo)
+![w:850](../graphs/_ALL_MONSTERS/final_baseline_P_win__solo_all_monsters.png)
+
+---
+
+# Comparativa — Prob. base de victoria (Healer)
+![w:850](../graphs/_ALL_MONSTERS/final_baseline_P_win__healer_all_monsters.png)
+
+---
+
+# Comparativa — Prob. base de victoria (Party)
+![w:850](../graphs/_ALL_MONSTERS/final_baseline_P_win__full_all_monsters.png)
+
+---
+
+# Comparativa — Prob. de ganar | party first (Solo)
+![w:850](../graphs/_ALL_MONSTERS/final_P_win___party_first__solo_all_monsters.png)
+
+---
+
+# Comparativa — Prob. de ganar | party first (Healer)
+![w:850](../graphs/_ALL_MONSTERS/final_P_win___party_first__healer_all_monsters.png)
+
+---
+
+# Comparativa — Prob. de ganar | party first (Party)
+![w:850](../graphs/_ALL_MONSTERS/final_P_win___party_first__full_all_monsters.png)
+
+---
+
+# Comparativa — Prob. de ganar | primer ataque crítico (Solo)
+![w:850](../graphs/_ALL_MONSTERS/final_P_win___first_attack_crit__solo_all_monsters.png)
+
+---
+
+# Comparativa — Prob. de ganar | primer ataque crítico (Healer)
+![w:850](../graphs/_ALL_MONSTERS/final_P_win___first_attack_crit__healer_all_monsters.png)
+
+---
+
+# Comparativa — Prob. de ganar | primer ataque crítico (Party)
+![w:850](../graphs/_ALL_MONSTERS/final_P_win___first_attack_crit__full_all_monsters.png)
+
+---
+
+# Comparativa — ΔP(win) si fallo primer ataque (Solo)
+![w:850](../graphs/_ALL_MONSTERS/final_ΔP_win__if_first_attack_missed_solo_all_monsters.png)
+
+---
+
+# Comparativa — ΔP(win) si fallo primer ataque (Healer)
+![w:850](../graphs/_ALL_MONSTERS/final_ΔP_win__if_first_attack_missed_healer_all_monsters.png)
+
+---
+
+# Comparativa — ΔP(win) si fallo primer ataque (Party)
+![w:850](../graphs/_ALL_MONSTERS/final_ΔP_win__if_first_attack_missed_full_all_monsters.png)
+
+---
+
+# Comparativa — ΔP(win) si recibo crit en turno 1 (Solo)
+![w:850](../graphs/_ALL_MONSTERS/final_ΔP_win__if_received_crit_on_monster_first_turn_solo_all_monsters.png)
+
+---
+
+# Comparativa — ΔP(win) si recibo crit en turno 1 (Healer)
+![w:850](../graphs/_ALL_MONSTERS/final_ΔP_win__if_received_crit_on_monster_first_turn_healer_all_monsters.png)
+
+---
+
+# Comparativa — ΔP(win) si recibo crit en turno 1 (Party)
+![w:850](../graphs/_ALL_MONSTERS/final_ΔP_win__if_received_crit_on_monster_first_turn_full_all_monsters.png)
+
+---
+
+# Comparativa — Racha de críticos (mínimo) — Solo
+![w:850](../graphs/_ALL_MONSTERS/final_crit_streak_min_solo_all_monsters.png)
+
+---
+
+# Comparativa — Racha de críticos (mínimo) — Healer
+![w:850](../graphs/_ALL_MONSTERS/final_crit_streak_min_healer_all_monsters.png)
+
+---
+
+# Comparativa — Racha de críticos (mínimo) — Party
+![w:850](../graphs/_ALL_MONSTERS/final_crit_streak_min_full_all_monsters.png)
+
+---
+
+# Comparativa — Racha de críticos (máximo) — Solo
+![w:850](../graphs/_ALL_MONSTERS/final_crit_streak_max_solo_all_monsters.png)
+
+---
+
+# Comparativa — Racha de críticos (máximo) — Healer
+![w:850](../graphs/_ALL_MONSTERS/final_crit_streak_max_healer_all_monsters.png)
+
+---
+
+# Comparativa — Racha de críticos (máximo) — Party
+![w:850](../graphs/_ALL_MONSTERS/final_crit_streak_max_full_all_monsters.png)
+
+---
+
+# Comparativa — Racha de críticos (promedio > 0) — Solo
+![w:850](../graphs/_ALL_MONSTERS/final_crit_streak_avg_0_solo_all_monsters.png)
+
+---
+
+# Comparativa — Racha de críticos (promedio > 0) — Healer
+![w:850](../graphs/_ALL_MONSTERS/final_crit_streak_avg_0_healer_all_monsters.png)
+
+---
+
+# Comparativa — Racha de críticos (promedio > 0) — Party
+![w:850](../graphs/_ALL_MONSTERS/final_crit_streak_avg_0_full_all_monsters.png)
+
+---
+
 # Supuestos y limitaciones
 
 * AC, HP y modificadores fijos (no escalamos con condiciones fuera del modelo).
@@ -433,16 +546,6 @@ else:
 * Decisiones “inteligentes” codificadas: Action Surge, uso de superioridad, objetivos, etc.
   → No hay “blunders” ni TTP complejos; es una **política determinista**.
 * Independencias aproximadas: p. ej., rachas de críticos se miden en un proceso con nº de ataques aleatorio y estados (ventaja) que cambian.
-
----
-
-# Reproducibilidad
-
-* **CSV**: `csv/<MONSTRUO>/dnd_*.csv` contienen métricas por dado.
-* **Gráficas por monstruo**: `graphs/<MONSTRUO>/plot_*.png`.
-* **Comparativas globales**: `graphs/_ALL_MONSTERS/final_*.png`.
-* **Semilla RNG** configurable: `--seed`.
-* **Intensidad Monte Carlo**: `--sims` (sug.: ≥ 10k).
 
 ---
 
