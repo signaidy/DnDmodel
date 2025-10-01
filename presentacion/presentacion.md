@@ -381,8 +381,6 @@ $$
 \text{IC 95\%} \approx \hat p \pm 1.96\sqrt{\tfrac{\hat p(1-\hat p)}{n}}.
 $$
 
-Diferencias de proporciones $\hat p_a - \hat p_b$: aproximación normal con varianza suma (si independientes) o teniendo en cuenta covarianza (si comparten muestra).
-
 ---
 
 # Preguntas clave que respondemos
