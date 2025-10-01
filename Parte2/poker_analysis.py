@@ -5,6 +5,7 @@ from typing import Tuple, List
 import numpy as np
 import pandas as pd
 
+# Usamos el backend "Agg" de matplotlib para generar gráficos sin interfaz gráfica
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -19,16 +20,24 @@ from sklearn.ensemble import RandomForestClassifier
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
+# URLs del dataset Poker Hand (train y test)
 DATA_URL_TRAIN = "https://archive.ics.uci.edu/ml/machine-learning-databases/poker/poker-hand-training-true.data"
 DATA_URL_TEST  = "https://archive.ics.uci.edu/ml/machine-learning-databases/poker/poker-hand-testing.data"
 
+# Directorio de salida para resultados y gráficos
 OUTPUTS_DIR = "outputs"
-RANDOM_STATE = 42
+RANDOM_STATE = 42  # Semilla fija para reproducibilidad
 
 def ensure_outputs():
+    """Asegura que la carpeta de outputs exista."""
     os.makedirs(OUTPUTS_DIR, exist_ok=True)
 
 def load_poker_data(sample_n: int = None) -> Tuple[pd.DataFrame, pd.Series]:
+    """
+    Descarga y carga los datos de Poker Hand.
+    - sample_n: número de filas a tomar (None o -1 para todo el dataset).
+    Retorna X (features crudas) y (etiquetas).
+    """
     colnames = ["S1","R1","S2","R2","S3","R3","S4","R4","S5","R5","y"]
     df_tr = pd.read_csv(DATA_URL_TRAIN, header=None, names=colnames)
     try:
@@ -36,13 +45,22 @@ def load_poker_data(sample_n: int = None) -> Tuple[pd.DataFrame, pd.Series]:
     except Exception:
         df_te = pd.DataFrame(columns=colnames)
     df = pd.concat([df_tr, df_te], axis=0, ignore_index=True)
+
+    # Muestreo opcional para acelerar experimentos
     if sample_n is not None and sample_n > 0 and sample_n < len(df):
         df = df.sample(n=sample_n, random_state=RANDOM_STATE).reset_index(drop=True)
+
     X = df.drop(columns=["y"]).copy()
     y = df["y"].copy().astype(int)
     return X, y
 
 def make_hand_features(df_cards: pd.DataFrame) -> pd.DataFrame:
+    """
+    Construye nuevas características a partir de las 5 cartas de la mano:
+    - Conteos de rangos y suits
+    - Indicadores de jugadas (pares, tríos, póker, flush, straight)
+    - Estadísticos de rangos (suma, media, desviación, gaps)
+    """
     ranks = df_cards[["R1","R2","R3","R4","R5"]].values
     suits = df_cards[["S1","S2","S3","S4","S5"]].values
 
@@ -56,20 +74,26 @@ def make_hand_features(df_cards: pd.DataFrame) -> pd.DataFrame:
     }
 
     def is_sequence(sorted_ranks: List[int]):
+        """Detecta si los rangos son consecutivos (straight)."""
         diffs = np.diff(sorted_ranks)
         if np.all(diffs == 1):
             return True, int(sorted_ranks[-1])
         return False, 0
 
+    # Iterar por cada mano
     for i in range(df_cards.shape[0]):
         r = ranks[i, :].astype(int)
         s = suits[i, :].astype(int)
         r_sorted = np.sort(r)
+
+        # Conteos de rangos y suits
         uniq_r = np.unique(r_sorted)
         uniq_s = np.unique(s)
         from collections import Counter as C
         cnt_r = C(r_sorted)
         cnt_s = C(s)
+
+        # Detectar patrones
         counts_r_sorted = sorted(cnt_r.values(), reverse=True)
         max_cnt_r = counts_r_sorted[0] if counts_r_sorted else 0
         num_pairs = sum(1 for v in cnt_r.values() if v == 2)
@@ -79,9 +103,11 @@ def make_hand_features(df_cards: pd.DataFrame) -> pd.DataFrame:
         is_flush = 1 if max_cnt_s == 5 else 0
         straight, high = is_sequence(r_sorted)
 
+        # Gaps entre cartas ordenadas
         gaps = np.diff(r_sorted)
         gap12, gap23, gap34, gap45 = (int(gaps[0]), int(gaps[1]), int(gaps[2]), int(gaps[3]))
 
+        # Guardar features
         feats["unique_ranks"].append(len(uniq_r))
         feats["unique_suits"].append(len(uniq_s))
         feats["max_count_rank"].append(max_cnt_r)
@@ -106,13 +132,17 @@ def make_hand_features(df_cards: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(feats, index=df_cards.index)
 
 def build_dataset(sample_n: int = None) -> Tuple[pd.DataFrame, pd.Series]:
+    """Carga los datos y genera el dataset extendido con features derivadas."""
     X_raw, y = load_poker_data(sample_n=sample_n)
     X_feat = make_hand_features(X_raw)
     X_all = pd.concat([X_raw, X_feat], axis=1)
     return X_all, y
 
 def eda_plots(X_raw: pd.DataFrame, y: pd.Series):
+    """Genera y guarda los gráficos de EDA (distribución de etiquetas, histogramas de R y S)."""
     ensure_outputs()
+
+    # Distribución de etiquetas
     plt.figure()
     y.value_counts().sort_index().plot(kind="bar")
     plt.title("Distribución de etiquetas (mano de póker)")
@@ -122,6 +152,7 @@ def eda_plots(X_raw: pd.DataFrame, y: pd.Series):
     plt.savefig(os.path.join(OUTPUTS_DIR, "labels_distribution.png"))
     plt.close()
 
+    # Histogramas de rangos
     for col in ["R1","R2","R3","R4","R5"]:
         plt.figure()
         X_raw[col].plot(kind="hist", bins=13)
@@ -131,22 +162,33 @@ def eda_plots(X_raw: pd.DataFrame, y: pd.Series):
         plt.savefig(os.path.join(OUTPUTS_DIR, f"hist_{col}.png"))
         plt.close()
 
+    # Histogramas de suits
     for col in ["S1","S2","S3","S4","S5"]:
         plt.figure()
         X_raw[col].plot(kind="hist", bins=4)
         plt.title(f"Histograma {col}")
-        plt.xlabel("Traje (1..4)")
+        plt.xlabel("Suit (1..4)")
         plt.tight_layout()
         plt.savefig(os.path.join(OUTPUTS_DIR, f"hist_{col}.png"))
         plt.close()
 
 def evaluate_models(X: pd.DataFrame, y: pd.Series, cv_splits: int = 5, fast: bool = False) -> pd.DataFrame:
+    """
+    Evalúa modelos (Logistic Regression y Random Forest):
+    - Cross-validation estratificada
+    - Reportes de clasificación
+    - Matrices de confusión
+    - Importancias de variables
+    """
     ensure_outputs()
+
+    # Modelo 1: Regresión Logística
     logreg = Pipeline([
         ("scaler", StandardScaler()),
         ("clf", LogisticRegression(max_iter=1000, class_weight="balanced", solver="lbfgs"))
     ])
 
+    # Modelo 2: Random Forest
     rf = RandomForestClassifier(
         n_estimators=200 if not fast else 120,
         max_depth=20 if not fast else 12,
@@ -159,10 +201,11 @@ def evaluate_models(X: pd.DataFrame, y: pd.Series, cv_splits: int = 5, fast: boo
     skf = StratifiedKFold(n_splits=folds, shuffle=True, random_state=RANDOM_STATE)
     scoring = {"accuracy": "accuracy", "f1_macro": "f1_macro"}
 
-    # Ejecutar CV en un solo proceso para evitar problemas con backends/GC
+    # Cross-validation (1 proceso para evitar problemas en Windows)
     cv_logreg = cross_validate(logreg, X, y, scoring=scoring, cv=skf, return_train_score=False, n_jobs=1)
     cv_rf     = cross_validate(rf,    X, y, scoring=scoring, cv=skf, return_train_score=False, n_jobs=1)
 
+    # Consolidar resultados
     results = pd.DataFrame({
         "model": ["LogisticRegression"] * folds + ["RandomForest"] * folds,
         "fold": list(range(1, folds+1)) * 2,
@@ -170,6 +213,7 @@ def evaluate_models(X: pd.DataFrame, y: pd.Series, cv_splits: int = 5, fast: boo
         "f1_macro": np.concatenate([cv_logreg["test_f1_macro"], cv_rf["test_f1_macro"]]),
     })
 
+    # Holdout del 20% para evaluación final
     X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, stratify=y, random_state=RANDOM_STATE)
     logreg.fit(X_tr, y_tr)
     rf.fit(X_tr, y_tr)
@@ -182,6 +226,7 @@ def evaluate_models(X: pd.DataFrame, y: pd.Series, cv_splits: int = 5, fast: boo
     acc_rf = accuracy_score(y_te, preds_rf)
     f1_rf  = f1_score(y_te, preds_rf, average="macro")
 
+    # Guardar reportes
     with open(os.path.join(OUTPUTS_DIR, "classification_report_logreg.txt"), "w", encoding="utf-8") as f:
         f.write(classification_report(y_te, preds_lr, digits=4))
         f.write(f"\nAccuracy: {acc_lr:.4f}  Macro-F1: {f1_lr:.4f}\n")
@@ -190,6 +235,7 @@ def evaluate_models(X: pd.DataFrame, y: pd.Series, cv_splits: int = 5, fast: boo
         f.write(classification_report(y_te, preds_rf, digits=4))
         f.write(f"\nAccuracy: {acc_rf:.4f}  Macro-F1: {f1_rf:.4f}\n")
 
+    # Matrices de confusión
     for name, preds in [("logreg", preds_lr), ("randomforest", preds_rf)]:
         cm = confusion_matrix(y_te, preds, labels=sorted(y.unique()))
         disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=sorted(y.unique()))
@@ -200,6 +246,7 @@ def evaluate_models(X: pd.DataFrame, y: pd.Series, cv_splits: int = 5, fast: boo
         fig.savefig(os.path.join(OUTPUTS_DIR, f"confusion_{name}.png"))
         plt.close(fig)
 
+    # Importancias de variables (RF)
     importances = pd.Series(rf.feature_importances_, index=X.columns).sort_values(ascending=False)
     topk = importances.head(20)
     plt.figure()
@@ -209,15 +256,18 @@ def evaluate_models(X: pd.DataFrame, y: pd.Series, cv_splits: int = 5, fast: boo
     plt.savefig(os.path.join(OUTPUTS_DIR, "feature_importance_rf_top20.png"))
     plt.close()
 
+    # Guardar métricas de CV
     results.to_csv(os.path.join(OUTPUTS_DIR, "cv_results.csv"), index=False)
     summary = results.groupby("model")[["accuracy","f1_macro"]].agg(["mean","std"])
     summary.to_csv(os.path.join(OUTPUTS_DIR, "cv_summary.csv"))
+
     print("Resumen CV:")
     print(summary)
     print("\nHoldout (20%)\n - LogReg:  acc={:.4f}, f1_macro={:.4f}\n - RF:      acc={:.4f}, f1_macro={:.4f}".format(acc_lr, f1_lr, acc_rf, f1_rf))
     return results
 
 def main():
+    """Punto de entrada principal: orquesta carga, EDA, features, modelos y evaluación."""
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--sample", type=int, default=100000, help="Tamaño de muestra máximo a usar. Usa -1 para todo.")

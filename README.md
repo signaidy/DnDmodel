@@ -1,5 +1,3 @@
-
-
 # DnD Battle Simulator & Plotter
 
 Monte-Carlo simulator that pits a level-10 party (Warrior, optional Healer, optional Rogue & Wizard) against various monsters across different weapon damage dice. It writes CSV summaries and grouped-bar charts for quick visual comparison.
@@ -186,3 +184,139 @@ Each simulator returns flags for win/initiative/first-turn events and crit-strea
 ---
 
 Happy sim-slaying! 🐉🎲
+
+# Proyecto de Análisis de Datos – Poker Hand (UCI)
+
+Este proyecto realiza **análisis exploratorio de datos (EDA)**, **ingeniería de características** y **modelado predictivo** sobre el dataset [Poker Hand](https://archive.ics.uci.edu/dataset/158/poker+hand) del UCI Machine Learning Repository.
+
+Se implementa un flujo en Python (`poker_analysis.py`) que genera gráficas, datasets transformados y métricas, además de una presentación en Marp para comunicar los resultados.
+
+---
+
+## 📂 Estructura del proyecto
+
+```
+
+Parte2/
+├── outputs/                     # Carpeta generada automáticamente
+│   ├── labels_distribution.png  # Distribución de etiquetas (clases 0–9)
+│   ├── hist_R*.png              # Histogramas de rangos R1–R5
+│   ├── hist_S*.png              # Histogramas de suits S1–S5
+│   ├── confusion_*.png          # Matrices de confusión (LogReg, RF)
+│   ├── feature_importance_rf_top20.png
+│   ├── cv_results.csv           # Resultados de cross-validation (por fold)
+│   ├── cv_summary.csv           # Promedios y desviaciones
+│   ├── classification_report_*.txt
+│   └── dataset_with_features.csv
+├── poker_analysis.py             # Script principal
+├── presentacion/presentacion.md  # Presentación en Marp
+└── README.md                     # Este archivo
+
+````
+
+---
+
+## ⚙️ Instalación
+
+1. Clonar o descargar el proyecto.
+2. Crear entorno virtual y activar:
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate   # Linux / Mac
+   .venv\Scripts\activate      # Windows
+````
+
+3. Instalar dependencias:
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+---
+
+## ▶️ Ejecución del script
+
+El script descarga el dataset, realiza el análisis y guarda los resultados en `outputs/`.
+
+### Comandos de ejemplo
+
+* Ejecución estándar (100,000 filas):
+
+  ```bash
+  python poker_analysis.py --sample 100000
+  ```
+
+* Ejecución rápida (menos folds y menos árboles en Random Forest):
+
+  ```bash
+  python poker_analysis.py --sample 50000 --fast
+  ```
+
+* Ejecución completa (todo el dataset):
+
+  ```bash
+  python poker_analysis.py --sample -1
+  ```
+
+### Parámetros principales
+
+* `--sample`: número de filas a usar (`-1` para todo el dataset).
+* `--fast`: activa modo rápido (3 folds, Random Forest más ligero).
+
+---
+
+## 🔎 Flujo del script
+
+1. **Carga de datos** desde UCI (train + test).
+2. **EDA**: histogramas de rangos (R1..R5), suits (S1..S5) y distribución de etiquetas.
+3. **Ingeniería de características**:
+
+   * Conteo de rangos y suits únicos.
+   * Detección de pares, tríos, póker.
+   * Identificación de flush y straight.
+   * Estadísticos de rangos (suma, media, gaps).
+4. **Modelado**:
+
+   * **Regresión Logística** (multiclase, balanced).
+   * **Random Forest** (balanced_subsample).
+5. **Evaluación**:
+
+   * Cross-validation estratificada (Accuracy y Macro-F1).
+   * Holdout del 20% para matrices de confusión.
+6. **Resultados**:
+
+   * Gráficas y métricas guardadas en `outputs/`.
+
+---
+
+## 📊 Resultados clave
+
+* Dataset **altamente desbalanceado** (clase 0 domina, clases como straight flush casi inexistentes).
+* **Random Forest** supera a la Regresión Logística en **Macro-F1** (~0.96 vs ~0.92).
+* Ambos modelos logran Accuracy ~99.9%, pero esta métrica es engañosa en este contexto.
+* Features de dominio (ej. `num_pairs`, `unique_ranks`, `has_three`) fueron las más importantes.
+
+---
+
+## 📑 Presentación
+
+El archivo [`presentacion/presentacion.md`](presentacion/presentacion.md) contiene la presentación en **Marp** con:
+
+* Objetivos, definiciones y explicación de variables.
+* Resultados de EDA y feature engineering.
+* Comparación de modelos (LogReg vs Random Forest).
+* Conclusiones y recomendaciones.
+
+Puedes exportar a PDF o PPTX con Marp:
+
+```bash
+marp presentacion/presentacion.md --pdf --allow-local-files
+```
+
+---
+
+## ✨ Créditos
+
+* **Autor:** Carlos Solares
+* **Fecha:** 30/09/2025
+* **Dataset:** UCI Machine Learning Repository – Poker Hand
