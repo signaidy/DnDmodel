@@ -220,11 +220,14 @@ Parte2/
 
 1. Clonar o descargar el proyecto.
 2. Crear entorno virtual y activar:
-   ```bash
+
+```bash
+
    python -m venv .venv
    source .venv/bin/activate   # Linux / Mac
    .venv\Scripts\activate      # Windows
-````
+
+```
 
 3. Instalar dependencias:
 
